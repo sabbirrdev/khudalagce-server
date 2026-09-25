@@ -182,6 +182,7 @@ public Page<ProductDto> getPageableProductByBranch(BasePageableRequest basePagea
         entity.setServiceType(resolveServiceType(dto.getServiceType()));
         entity.setQty(dto.getQty() != null ? dto.getQty() : 0);
         entity.setVat(dto.getVat() != null ? dto.getVat() : BigDecimal.ZERO);
+        entity.setActive(true);
         setCategory(entity, dto.getCategoryId());
         setBranch(entity, dto.getBranchId());
         setProductVariants(entity, dto);

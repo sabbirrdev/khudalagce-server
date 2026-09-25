@@ -5,12 +5,15 @@ import com.company.efood.base.BasePageableRequest;
 import com.company.efood.base.BaseUtils;
 import com.company.efood.config.CurrentUserContext;
 import com.company.efood.seller.dto.BranchDto;
+import com.company.efood.seller.entity.Seller;
 import com.company.efood.seller.repository.BranchRepo;
+import com.company.efood.seller.repository.SellerRepo;
 import com.company.efood.seller.services.BranchService;
 import com.company.efood.sys.dto.AddressDto;
 import com.company.efood.sys.entity.Address;
 import com.company.efood.sys.entity.Branch;
 import com.company.efood.sys.entity.Shop;
+import com.company.efood.sys.repository.AppUserRepo;
 import com.company.efood.sys.repository.ShopRepo;
 import jakarta.transaction.Transactional;
 import lombok.AllArgsConstructor;
@@ -23,8 +26,8 @@ import org.springframework.stereotype.Service;
 
 import javax.naming.NameNotFoundException;
 import java.time.LocalDateTime;
-import java.util.Date;
 import java.util.List;
+import java.util.Objects;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -33,11 +36,26 @@ import java.util.stream.Stream;
 @AllArgsConstructor
 public class BranchServiceImpl implements BranchService {
 
-    private BranchRepo branchRepo;
-    private ShopRepo shopRepo;
+    private final BranchRepo branchRepo;
+    private final ShopRepo shopRepo;
+    private final SellerRepo sellerRepo;
+    private final AppUserRepo appUserRepo;
+    private final BaseUtils baseUtils;
+    private final ModelMapper modelMapper;
 
-    private BaseUtils baseUtils;
-    private ModelMapper modelMapper;
+    private Shop resolveShop(Long sellerId, Long userId) {
+        Shop shop = null;
+        if (sellerId != null) {
+            shop = shopRepo.findShopBySellerId(sellerId).orElse(null);
+        }
+        if (shop == null && userId != null) {
+            Seller seller = sellerRepo.findByAppUserId(userId).orElse(null);
+            if (seller != null) {
+                shop = shopRepo.findShopBySellerId(seller.getId()).orElse(null);
+            }
+        }
+        return shop;
+    }
 
     @Override
     @Transactional
@@ -131,28 +149,35 @@ public class BranchServiceImpl implements BranchService {
 
     //-----------------------Helper Function---------------------------
 
-    private Branch generateEntity(BranchDto dto, Long userId,Long sellerId, Boolean isSaved) {
+    private Branch generateEntity(BranchDto dto, Long userId, Long sellerId, Boolean isSaved) {
         Logger logger = Logger.getLogger("BranchServiceImpl");
         Branch entity = new Branch();
         BeanUtils.copyProperties(dto, entity);
         try {
-            Shop shop = shopRepo.findShopBySellerId(sellerId).orElseThrow(() -> new NameNotFoundException("Shop Not Found"));
+            Shop shop = resolveShop(sellerId, userId);
+            if (shop == null && dto.getShopId() != null) {
+                shop = shopRepo.findById(dto.getShopId().longValue()).orElse(null);
+            }
+            if (shop == null) {
+                throw new NameNotFoundException("Shop Not Found for the authenticated seller");
+            }
+
             if (isSaved) {
                 entity.setEntryUser(userId);
                 entity.setShop(shop);
                 entity.setActive(true);
-                logger.info("Branch: "+entity.getName());
-                //entity.setOpeningHours(dto.getOpeningHours());
+                logger.info("Branch: " + entity.getName());
                 entity.setAddress(generateAddressEntity(dto.getAddress(), userId));
                 baseUtils.setEntryUserInfo(entity);
             } else {
                 Branch dbEntity = branchRepo.findById(dto.getId()).orElseThrow(() -> new NameNotFoundException("Branch not found"));
+                entity.setShop(dbEntity.getShop() != null ? dbEntity.getShop() : shop);
                 entity.setUpdateUser(userId);
                 baseUtils.setUpdateUserInfo(entity, dbEntity);
             }
             return entity;
         } catch (Exception e) {
-            throw new RuntimeException("Error generating Shop entity", e);
+            throw new RuntimeException("Error generating Branch entity: " + e.getMessage(), e);
         }
     }
 

@@ -27,4 +27,9 @@ public class ShopDto extends BaseDto {
     private String logoUrl;
     private Long sellerId;
     private Long commissionPolicyId;
+    private Long zoneId;
+    private Double shopLat;
+    private Double shopLon;
+    private String shopAddress;
+    private String shopType;
 }
