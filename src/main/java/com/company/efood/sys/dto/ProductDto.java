@@ -25,7 +25,9 @@ public class ProductDto extends BaseDto {
     private List<ProductImageDto> images;
     private String description;
     private BigDecimal price;
+    private BigDecimal buyingPrice;
     private BigDecimal discountPrice;
+    private String itemWeight;
     private String brand = "No Brand";
     private Integer qty;
     private BigDecimal vat ;

@@ -1,7 +1,6 @@
 package com.company.efood.raider.entity;
 
 import com.company.efood.base.BaseEntity;
-import com.company.efood.sys.entity.DeliveryFeePolicy;
 import jakarta.persistence.*;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -29,9 +28,4 @@ public class RaiderEarning extends BaseEntity {
 
     @Column(name = "EARNED_AT")
     private LocalDateTime earnedAt = LocalDateTime.now();
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "DELIVERY_FEE_POLICY_ID")
-    private DeliveryFeePolicy deliveryFeePolicy;
-
 }

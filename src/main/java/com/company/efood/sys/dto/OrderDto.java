@@ -39,11 +39,22 @@ public class OrderDto extends BaseDto {
     private BigDecimal totalAmount;
     private BigDecimal discount = BigDecimal.valueOf(0.0);
     private BigDecimal tax = BigDecimal.valueOf(0.0);
-    private Long DeliveryFeePolicyId;
+    private Long zoneId;
+    private String zoneName;
     private Long commissionPolicyId;
     private BigDecimal deliveryFee;
+    private BigDecimal riderEarnings;
     //private Integer preparationTime; // in minutes
     private LocalDateTime deliveredAt;
     private Integer loyaltyPointsToRedeem;
     private BigDecimal loyaltyDiscount;
+
+    // Vendor and Service (Vertical) Metadata for frontend & rider context
+    private Long shopId;
+    private String shopName;
+    private Long shopCategoryId;
+    private String shopCategoryName;
+    private Long serviceId;
+    private String serviceName;
+    private String serviceCode;
 }

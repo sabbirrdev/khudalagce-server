@@ -182,12 +182,14 @@ public Page<ProductDto> getPageableProductByBranch(BasePageableRequest basePagea
         entity.setServiceType(resolveServiceType(dto.getServiceType()));
         entity.setQty(dto.getQty() != null ? dto.getQty() : 0);
         entity.setVat(dto.getVat() != null ? dto.getVat() : BigDecimal.ZERO);
-        entity.setActive(true);
+        entity.setActive(dto.getActive() != null ? dto.getActive() : true);
+        entity.setIsApproved(true);
         setCategory(entity, dto.getCategoryId());
         setBranch(entity, dto.getBranchId());
         setProductVariants(entity, dto);
         setProductAddons(entity, dto);
 
+        entity.setItemWeight(dto.getItemWeight());
         if (Boolean.TRUE.equals(isSaved)) {
             setEntryUserInfo(entity, userId);
         }
@@ -234,6 +236,8 @@ public Page<ProductDto> getPageableProductByBranch(BasePageableRequest basePagea
                 dto.setShopName(entity.getBranch().getShop().getShopName());
             }
         }
+        dto.setItemWeight(entity.getItemWeight());
+        dto.setActive(entity.getActive() != null ? entity.getActive() : true);
         return dto;
     }
 
@@ -291,6 +295,9 @@ public Page<ProductDto> getPageableProductByBranch(BasePageableRequest basePagea
         Product existing = productRepo.findById(productId)
                 .orElseThrow(() -> new IllegalArgumentException("Product not found: " + productId));
         entity.setUpdateUser(userId);
+        if (entity.getActive() == null) {
+            entity.setActive(existing.getActive() != null ? existing.getActive() : true);
+        }
         baseUtils.setUpdateUserInfo(entity, existing);
     }
 

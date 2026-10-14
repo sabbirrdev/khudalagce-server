@@ -184,7 +184,19 @@ public class BranchServiceImpl implements BranchService {
 
     private Address generateAddressEntity(AddressDto addressDto, Long userId) {
         Address address = new Address();
-        BeanUtils.copyProperties(addressDto, address);
+        if (addressDto != null) {
+            BeanUtils.copyProperties(addressDto, address);
+        }
+        // Ensure required non-null String columns have defaults if DTO was null or incomplete
+        if (address.getAddress() == null || address.getAddress().isBlank()) {
+            address.setAddress("—");
+        }
+        if (address.getDistrict() == null || address.getDistrict().isBlank()) {
+            address.setDistrict("—");
+        }
+        if (address.getPoliceStation() == null || address.getPoliceStation().isBlank()) {
+            address.setPoliceStation("—");
+        }
         address.setEntryDate(LocalDateTime.now());
         address.setEntryUser(userId);
         return address;

@@ -70,6 +70,9 @@ public class RaiderRegistrationController {
     @Autowired
     private FcmNotificationService fcmNotificationService;
 
+    @Autowired
+    private com.company.efood.sys.services.SmsOtpService smsOtpService;
+
     @GetMapping("available")
     public BaseResponse getAvailableRiders(@RequestParam(value = "vehicleType", required = false) String vehicleType) {
         try {
@@ -126,8 +129,17 @@ public class RaiderRegistrationController {
         }
 
         try {
-            AppUser savedUser = registerService.addUser(generateRiderEntity(requestModel, pw));
+            AppUser riderUser = generateRiderEntity(requestModel, pw);
+            String otp = String.format("%06d", (int) (Math.random() * 1000000));
+            riderUser.setOtp(otp);
+            riderUser.setOtpExpiresAt(LocalDateTime.now().plusMinutes(10));
+            AppUser savedUser = registerService.addUser(riderUser);
             populateRaiderProfile(savedUser, requestModel);
+
+            // Send SMS OTP (dev mode will log and keep in DB)
+            if (requestModel.getPhone() != null && !requestModel.getPhone().isBlank()) {
+                smsOtpService.sendOtp(requestModel.getPhone().trim(), otp);
+            }
 
             // Notify Admin Portal
             try {
@@ -136,21 +148,17 @@ public class RaiderRegistrationController {
                 log.warn("Could not notify admin of new rider registration: {}", e.getMessage());
             }
 
-            Authentication authentication = authenticationManager.authenticate(
-                    new UsernamePasswordAuthenticationToken(requestModel.getUsername(), pass));
-            SecurityContextHolder.getContext().setAuthentication(authentication);
-
-            String token = authTokenUtils.generateJWTToken(authentication);
-            CustomUserDetails userDetails = (CustomUserDetails) authentication.getPrincipal();
-            RefreshTokenDto refreshTokenDto = authTokenUtils.generateRefreshToken(requestModel.getUsername());
+            // ✅ SECURITY: Do NOT issue JWT token here. The rider must verify phone via OTP first.
+            java.util.Map<String, Object> data = new java.util.LinkedHashMap<>();
+            data.put("requiresOtpVerification", true);
+            data.put("phone", requestModel.getPhone() != null ? requestModel.getPhone().trim() : "");
+            data.put("username", requestModel.getUsername());
 
             return BaseResponse.builder()
-                    .statusCode(HttpStatus.OK.value())
+                    .statusCode(HttpStatus.ACCEPTED.value())
                     .status(true)
-                    .message("Registration successful")
-                    .data(new AuthResponseModel(token, refreshTokenDto.getRefreshToken(),
-                            userDetails.getUserTypeId(), userDetails.getAppUserType(),
-                            System.currentTimeMillis(), expiration))
+                    .message("Registration successful. A 6-digit verification code has been sent to " + requestModel.getPhone() + ". Please verify your phone to continue.")
+                    .data(data)
                     .build();
 
         } catch (InternalAuthenticationServiceException e) {
@@ -180,6 +188,8 @@ public class RaiderRegistrationController {
         appUser.setEntryDate(LocalDateTime.now());
         appUser.setAppUserType(AppUserType.RAIDER);
         appUser.setUserTypeId(USER_TYPE_ID_RAIDER);
+        appUser.setPhone(requestModel.getPhone() != null ? requestModel.getPhone().trim() : null);
+        appUser.setPhoneVerified(false);
         return appUser;
     }
 
@@ -207,6 +217,15 @@ public class RaiderRegistrationController {
             if (requestModel.getVehicleNumber() != null) {
                 raider.setVehicleNumber(requestModel.getVehicleNumber().trim());
             }
+            if (requestModel.getComplianceDocuments() != null && !requestModel.getComplianceDocuments().isEmpty()) {
+                if (raider.getComplianceDocuments() == null) {
+                    raider.setComplianceDocuments(new java.util.HashMap<>());
+                }
+                raider.getComplianceDocuments().putAll(requestModel.getComplianceDocuments());
+            }
+            // Admin Approval Gate: Newly registered riders are locked by default
+            raider.setIsApproved(false);
+            raider.setActive(false);
             raiderRepo.save(raider);
         });
     }

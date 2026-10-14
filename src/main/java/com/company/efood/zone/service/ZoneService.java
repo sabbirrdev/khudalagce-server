@@ -230,8 +230,56 @@ public class ZoneService {
         return saveZone(dto, userId);
     }
 
+    public boolean deleteZone(Long id) {
+        if (zoneRepo.existsById(id)) {
+            zoneRepo.deleteById(id);
+            return true;
+        }
+        return false;
+    }
+
+    public boolean deleteAllZones() {
+        zoneRepo.deleteAll();
+        return true;
+    }
+
+    public boolean deleteUpazila(Long id) {
+        if (upazilaRepo.existsById(id)) {
+            upazilaRepo.deleteById(id);
+            return true;
+        }
+        return false;
+    }
+
+    public boolean deleteDistrict(Long id) {
+        if (districtRepo.existsById(id)) {
+            districtRepo.deleteById(id);
+            return true;
+        }
+        return false;
+    }
+
+    public boolean deleteDivision(Long id) {
+        if (divisionRepo.existsById(id)) {
+            divisionRepo.deleteById(id);
+            return true;
+        }
+        return false;
+    }
+
     public List<ZoneDto> getZonesByUpazila(Long upazilaId) {
-        return zoneRepo.findByUpazilaId(upazilaId).stream()
+        List<Zone> zones = zoneRepo.findByUpazilaIdAndActiveTrue(upazilaId);
+        // Fallback: If no zone exists directly on this upazila,
+        // lookup active deliverable zones in the same district so customer is never stuck
+        if (zones.isEmpty() && upazilaId != null) {
+            Upazila upazila = upazilaRepo.findById(upazilaId).orElse(null);
+            if (upazila != null && upazila.getDistrict() != null) {
+                zones = zoneRepo.findByUpazilaDistrictId(upazila.getDistrict().getId()).stream()
+                        .filter(z -> Boolean.TRUE.equals(z.getActive()) && Boolean.TRUE.equals(z.getIsDeliverable()))
+                        .collect(Collectors.toList());
+            }
+        }
+        return zones.stream()
                 .map(this::mapZoneToDto)
                 .collect(Collectors.toList());
     }

@@ -53,43 +53,86 @@ public class ReferralServiceImpl implements ReferralService {
     @Override
     @Transactional
     public void initReferral(Customer customer, String incomingReferralCode) {
-        // 1. Generate and assign a unique code for this new customer.
-        String myCode = generateUniqueCode();
-        customer.setReferralCode(myCode);
+        // 1. Generate and assign a unique code for this new customer if they don't have one.
+        if (customer.getReferralCode() == null || customer.getReferralCode().isBlank()) {
+            String myCode = generateUniqueCode();
+            customer.setReferralCode(myCode);
+        }
+
+        Customer referrerToReward = null;
 
         // 2. If a valid referral code was supplied, link the referrer.
         if (incomingReferralCode != null && !incomingReferralCode.isBlank()) {
             String normalised = incomingReferralCode.trim().toUpperCase();
 
             // Prevent self-referral (edge case where code was typed from a screenshot).
-            if (normalised.equals(myCode)) {
-                log.warn("Customer tried to self-refer using code {}. Ignored.", myCode);
+            if (normalised.equalsIgnoreCase(customer.getReferralCode())) {
+                log.warn("Customer tried to self-refer using code {}. Ignored.", customer.getReferralCode());
             } else {
-                customerRepo.findByReferralCode(normalised).ifPresent(referrer -> {
+                Optional<Customer> referrerOpt = customerRepo.findByReferralCode(normalised);
+                if (referrerOpt.isEmpty()) {
+                    referrerOpt = customerRepo.findByReferralCodeIgnoreCase(normalised);
+                }
+                if (referrerOpt.isPresent()) {
+                    Customer referrer = referrerOpt.get();
                     // Prevent duplicate referral linking
                     if (customer.getReferredBy() == null) {
                         customer.setReferredBy(referrer);
+                        customer.setReferralRewardCredited(true);
+                        referrerToReward = referrer;
                         log.info("Customer #{} was referred by customer #{} (code={})",
                                 customer.getId(), referrer.getId(), normalised);
                     }
-                });
+                } else {
+                    log.warn("Referral code '{}' was not found in database. Registration proceeding without referral link.", normalised);
+                }
             }
         }
 
-        customerRepo.save(customer);
+        Customer savedCustomer = customerRepo.save(customer);
+        if (savedCustomer == null) {
+            savedCustomer = customer;
+        }
+
+        // Immediately credit referral bonus points to both referee and referrer on signup
+        if (referrerToReward != null && savedCustomer.getId() != null) {
+            try {
+                loyaltyService.adjustPoints(
+                        savedCustomer.getId(),
+                        null,
+                        refereeBonus,
+                        "Referral sign-up bonus (" + refereeBonus + " pts) for joining via code " + referrerToReward.getReferralCode()
+                );
+                loyaltyService.adjustPoints(
+                        referrerToReward.getId(),
+                        null,
+                        referrerBonus,
+                        "Referral reward (" + referrerBonus + " pts) — friend joined with your code " + referrerToReward.getReferralCode()
+                );
+            } catch (Exception ex) {
+                log.error("Failed to credit referral bonus points during signup: {}", ex.getMessage(), ex);
+            }
+        }
     }
 
     @Override
-    @Transactional(readOnly = true)
-    public ReferralInfoDto getReferralInfo(Long customerId) {
-        Customer customer = customerRepo.findById(customerId)
-                .orElseThrow(() -> new IllegalArgumentException("Customer not found: " + customerId));
+    @Transactional
+    public ReferralInfoDto getReferralInfo(Long customerIdOrUserId) {
+        Customer customer = resolveCustomer(customerIdOrUserId);
+        Long customerId = customer.getId();
 
-        // Count how many successful referees this customer has (reward already credited).
-        long referralCount = customerRepo.countReferredAndRewarded(customerId);
+        // Ensure user has a referral code generated if it was missing
+        if (customer.getReferralCode() == null || customer.getReferralCode().isBlank()) {
+            customer.setReferralCode(generateUniqueCode());
+            customer = customerRepo.save(customer);
+        }
 
-        // Points earned from referrals = referralCount * referrerBonus.
-        int pointsFromReferrals = (int) (referralCount * referrerBonus);
+        // Count all friends who registered using this customer's code
+        long referralCount = customerRepo.countByReferredById(customerId);
+
+        // Points earned from referrals = successfully rewarded referrals * referrerBonus
+        long rewardedCount = customerRepo.countReferredAndRewarded(customerId);
+        int pointsFromReferrals = (int) (rewardedCount * referrerBonus);
 
         return ReferralInfoDto.builder()
                 .referralCode(customer.getReferralCode())
@@ -105,17 +148,30 @@ public class ReferralServiceImpl implements ReferralService {
     @Transactional(readOnly = true)
     public Optional<Long> validateCode(String code) {
         if (code == null || code.isBlank()) return Optional.empty();
-        return customerRepo.findByReferralCode(code.trim().toUpperCase())
-                .map(Customer::getId);
+        String normalised = code.trim().toUpperCase();
+        Optional<Customer> opt = customerRepo.findByReferralCode(normalised);
+        if (opt.isEmpty()) {
+            opt = customerRepo.findByReferralCodeIgnoreCase(code.trim());
+        }
+        return opt.map(Customer::getId);
     }
 
     @Override
     @Transactional
-    public void creditReferralBonusIfEligible(Long refereeCustomerId, Long orderId) {
-        Customer referee = customerRepo.findById(refereeCustomerId).orElse(null);
+    public void creditReferralBonusIfEligible(Long refereeCustomerIdOrUserId, Long orderId) {
+        Customer referee = null;
+        try {
+            referee = resolveCustomer(refereeCustomerIdOrUserId);
+        } catch (Exception ignored) {
+            return;
+        }
         if (referee == null) return;
+        Long refereeCustomerId = referee.getId();
 
         // Only credit once, and only if this customer was referred by someone.
+        // referralRewardCredited is set true at signup (initReferral), so this is now a no-op
+        // for referees who already got their bonus. It still fires for old rows that signed up
+        // before the signup-bonus feature existed.
         if (referee.isReferralRewardCredited() || referee.getReferredBy() == null) return;
 
         // Check this is the referee's first COMPLETED order.
@@ -129,7 +185,7 @@ public class ReferralServiceImpl implements ReferralService {
 
         Customer referrer = referee.getReferredBy();
 
-        // --- Credit referee bonus ---
+        // --- Credit referee bonus (fallback for pre-signup-bonus accounts) ---
         loyaltyService.adjustPoints(
                 refereeCustomerId,
                 orderId,
@@ -151,6 +207,20 @@ public class ReferralServiceImpl implements ReferralService {
 
         log.info("Referral bonuses credited: referee #{} +{} pts, referrer #{} +{} pts for order #{}",
                 refereeCustomerId, refereeBonus, referrer.getId(), referrerBonus, orderId);
+    }
+
+    private Customer resolveCustomer(Long customerIdOrUserId) {
+        if (customerIdOrUserId == null) {
+            throw new IllegalArgumentException("Customer or User ID must not be null");
+        }
+        // First try finding customer directly by customerId (referenceId)
+        Optional<Customer> customerOpt = customerRepo.findById(customerIdOrUserId);
+        if (customerOpt.isPresent()) {
+            return customerOpt.get();
+        }
+        // Fallback: try finding customer by appUserId
+        return customerRepo.findByAppUserId(customerIdOrUserId)
+                .orElseThrow(() -> new IllegalArgumentException("Customer not found for ID: " + customerIdOrUserId));
     }
 
     // -----------------------------------------------------------------------

@@ -25,7 +25,7 @@ public class Shop extends BaseEntity {
     @Column(name = "SHOP_NAME_BN", length = 50)
     private String shopNameBn;
 
-    @Column(name = "ABOUT", nullable = false)
+    @Column(name = "ABOUT")
     private String about;
 
     @Column(name = "LOGO_URL")
@@ -62,6 +62,11 @@ public class Shop extends BaseEntity {
 
     @Column(name = "SHOP_ADDRESS")
     private String shopAddress;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "SHOP_CATEGORY_ID")
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
+    private ShopCategory shopCategory;
 
     @Column(name = "SHOP_TYPE")
     private String shopType;

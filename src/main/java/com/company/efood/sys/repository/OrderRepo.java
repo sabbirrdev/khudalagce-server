@@ -59,5 +59,7 @@ public interface OrderRepo extends JpaRepository<Order, Long> {
 
     Page<Order> findByStatusAndRaiderIsNull(com.company.efood.sys.utils.OrderStatus status, Pageable pageable);
 
+    Page<Order> findByStatusInAndRaiderIsNull(java.util.List<com.company.efood.sys.utils.OrderStatus> statuses, Pageable pageable);
+
     List<Order> findByEntryDateBetween(LocalDateTime start, LocalDateTime end);
 }

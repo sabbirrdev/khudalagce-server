@@ -48,6 +48,11 @@ public class Seller extends BaseEntity {
     @JoinColumn(name = "ADDRESS_ID")
     private Address address;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "SHOP_CATEGORY_ID")
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
+    private com.company.efood.sys.entity.ShopCategory shopCategory;
+
     @OneToOne(mappedBy = "seller", cascade = CascadeType.ALL, orphanRemoval = true)
     @JsonIgnore
     private Shop shop;

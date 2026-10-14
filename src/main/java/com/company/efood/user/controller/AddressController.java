@@ -43,12 +43,19 @@ public class AddressController {
                 entity = addressRepo.findById(dto.getId()).orElse(null);
             }
 
-            // If no ID, check if user already has an address with matching addressType AND matching address/label
-            if (entity == null && dto.getAddressType() != null) {
+            // If no ID, check if user already has an address with matching address content and addressType
+            if (entity == null) {
                 List<Address> userAddrs = addressRepo.findByEntryUserAndActiveTrue(userId);
+                final String targetAddr = dto.getAddress() != null ? dto.getAddress().trim() : "";
+                final AddressType targetType = dto.getAddressType();
+
                 entity = userAddrs.stream()
-                        .filter(a -> a.getAddressType() == dto.getAddressType() &&
-                                (dto.getLabel() == null || dto.getLabel().equalsIgnoreCase(a.getHouseNo())))
+                        .filter(a -> {
+                            boolean typeMatch = (targetType == null || a.getAddressType() == targetType);
+                            boolean textMatch = (!targetAddr.isEmpty() && a.getAddress() != null && a.getAddress().trim().equalsIgnoreCase(targetAddr));
+                            boolean labelMatch = (dto.getLabel() != null && !dto.getLabel().isBlank() && dto.getLabel().equalsIgnoreCase(a.getHouseNo()));
+                            return (typeMatch && textMatch) || labelMatch;
+                        })
                         .findFirst()
                         .orElse(null);
             }
@@ -105,7 +112,41 @@ public class AddressController {
     public BaseResponse getMyAddresses(HttpServletRequest request) {
         try {
             Long userId = authTokenUtils.getUserIdFromRequest(request);
-            List<AddressDto> dtos = addressRepo.findByEntryUserAndActiveTrue(userId)
+            List<Address> allAddrs = addressRepo.findByEntryUserAndActiveTrue(userId);
+
+            // Enterprise deduplication: Keep the most recent record per unique address key,
+            // and deactivate redundant duplicate rows in the database so the DB stays clean.
+            java.util.Map<String, Address> uniqueMap = new java.util.LinkedHashMap<>();
+            java.util.List<Address> duplicatesToDeactivate = new java.util.ArrayList<>();
+
+            for (Address a : allAddrs) {
+                String typeStr = a.getAddressType() != null ? a.getAddressType().name() : "DEFAULT";
+                String addrStr = a.getAddress() != null ? a.getAddress().trim().toLowerCase() : "";
+                String distStr = a.getDistrict() != null ? a.getDistrict().trim().toLowerCase() : "";
+                String key = typeStr + "|" + addrStr + "|" + distStr;
+
+                if (uniqueMap.containsKey(key)) {
+                    Address existing = uniqueMap.get(key);
+                    // Keep the entity with the larger/newer ID
+                    if (a.getId() != null && existing.getId() != null && a.getId() > existing.getId()) {
+                        duplicatesToDeactivate.add(existing);
+                        uniqueMap.put(key, a);
+                    } else {
+                        duplicatesToDeactivate.add(a);
+                    }
+                } else {
+                    uniqueMap.put(key, a);
+                }
+            }
+
+            if (!duplicatesToDeactivate.isEmpty()) {
+                for (Address dup : duplicatesToDeactivate) {
+                    dup.setActive(false);
+                }
+                addressRepo.saveAll(duplicatesToDeactivate);
+            }
+
+            List<AddressDto> dtos = uniqueMap.values()
                     .stream()
                     .map(this::toDto)
                     .collect(Collectors.toList());

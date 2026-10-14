@@ -33,5 +33,6 @@ public class RaiderDto extends BaseDto {
     private String vehicleType;
     private String vehicleNumber;
     private Boolean isAvailable = true;
+    private java.util.Map<String, String> complianceDocuments;
 
 }

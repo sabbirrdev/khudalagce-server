@@ -64,6 +64,7 @@ public class RaiderProfileController {
             profileData.put("fullName", raider.getFullName() != null ? raider.getFullName() : (raider.getAppUser() != null ? raider.getAppUser().getDisplayName() : ""));
             profileData.put("displayName", raider.getFullName() != null ? raider.getFullName() : (raider.getAppUser() != null ? raider.getAppUser().getDisplayName() : ""));
             profileData.put("phone", raider.getPhone() != null ? raider.getPhone() : "");
+            profileData.put("phoneVerified", raider.getAppUser() != null ? Boolean.TRUE.equals(raider.getAppUser().getPhoneVerified()) : false);
             profileData.put("nid", raider.getNid() != null ? raider.getNid() : "");
             profileData.put("vehicleType", raider.getVehicleType() != null ? raider.getVehicleType() : "BIKE");
             profileData.put("vehicleNumber", raider.getVehicleNumber() != null ? raider.getVehicleNumber() : "");

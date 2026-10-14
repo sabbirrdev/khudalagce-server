@@ -30,5 +30,8 @@ public class AppUserDto extends BaseDto implements Serializable {
     private Long userTypeId;
     private AppUserType appUserType;
     private String otp;
+    private String phone;
+    private String displayName;
+    private Boolean phoneVerified;
 
 }

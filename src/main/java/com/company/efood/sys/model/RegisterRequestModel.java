@@ -12,5 +12,8 @@ public class RegisterRequestModel {
     String vehicleType;
     String vehicleNumber;
     String referralCode;
+    Long shopCategoryId;
+    String shopCategory;
+    java.util.Map<String, String> complianceDocuments;
 }
 

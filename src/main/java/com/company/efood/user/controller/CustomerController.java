@@ -77,6 +77,7 @@ public class CustomerController {
             profileData.put("fullName", customer.getFullName() != null ? customer.getFullName() : (customer.getAppUser() != null ? customer.getAppUser().getDisplayName() : ""));
             profileData.put("displayName", customer.getFullName() != null ? customer.getFullName() : (customer.getAppUser() != null ? customer.getAppUser().getDisplayName() : ""));
             profileData.put("phone", customer.getPhone() != null ? customer.getPhone() : "");
+            profileData.put("phoneVerified", customer.getAppUser() != null ? Boolean.TRUE.equals(customer.getAppUser().getPhoneVerified()) : false);
             profileData.put("email", customer.getEmail() != null ? customer.getEmail() : (customer.getAppUser() != null ? customer.getAppUser().getUsername() : ""));
             profileData.put("nid", customer.getNid() != null ? customer.getNid() : "");
             profileData.put("gender", customer.getGender() != null ? customer.getGender().name() : "");

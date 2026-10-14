@@ -3,7 +3,6 @@ package com.company.efood.user.entity;
 import com.company.efood.base.BaseEntity;
 import com.company.efood.sys.entity.Address;
 import com.company.efood.sys.entity.AppUser;
-import com.company.efood.sys.entity.DeliveryFeePolicy;
 import com.company.efood.sys.utils.Gender;
 import jakarta.persistence.*;
 import lombok.Data;
@@ -53,10 +52,6 @@ public class Customer extends BaseEntity {
     @OneToOne()
     @JoinColumn(name = "ADDRESS")
     private Address address;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "DELIVERY_FEE_POLICY_ID")
-    private DeliveryFeePolicy deliveryFeePolicy;
 
     // Referral Program
     @Column(name = "referral_code", unique = true, length = 12)

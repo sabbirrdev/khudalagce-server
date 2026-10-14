@@ -102,4 +102,29 @@ public class ZoneController {
     public BaseResponse getAllZonesAdmin() {
         return BaseResponse.builder().status(true).statusCode(200).data(zoneService.getAllZonesAdmin()).build();
     }
+
+    @DeleteMapping("/api/private/sya/zone/zone/{id}")
+    public BaseResponse deleteZone(@PathVariable Long id) {
+        return BaseResponse.builder().status(true).statusCode(200).data(zoneService.deleteZone(id)).message("Zone deleted successfully").build();
+    }
+
+    @DeleteMapping("/api/private/sya/zone/zones/cleanup-all")
+    public BaseResponse deleteAllZones() {
+        return BaseResponse.builder().status(true).statusCode(200).data(zoneService.deleteAllZones()).message("All zones removed successfully").build();
+    }
+
+    @DeleteMapping("/api/private/sya/zone/upazila/{id}")
+    public BaseResponse deleteUpazila(@PathVariable Long id) {
+        return BaseResponse.builder().status(true).statusCode(200).data(zoneService.deleteUpazila(id)).message("Upazila deleted successfully").build();
+    }
+
+    @DeleteMapping("/api/private/sya/zone/district/{id}")
+    public BaseResponse deleteDistrict(@PathVariable Long id) {
+        return BaseResponse.builder().status(true).statusCode(200).data(zoneService.deleteDistrict(id)).message("District deleted successfully").build();
+    }
+
+    @DeleteMapping("/api/private/sya/zone/division/{id}")
+    public BaseResponse deleteDivision(@PathVariable Long id) {
+        return BaseResponse.builder().status(true).statusCode(200).data(zoneService.deleteDivision(id)).message("Division deleted successfully").build();
+    }
 }

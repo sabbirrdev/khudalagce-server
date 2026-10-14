@@ -8,4 +8,6 @@ import java.util.List;
 
 public interface SupportConversationRepo extends JpaRepository<SupportConversation, Long> {
     List<SupportConversation> findByCustomerOrderByEntryDateDesc(AppUser customer);
+    List<SupportConversation> findAllByOrderByEntryDateDesc();
+    List<SupportConversation> findByStatusOrderByEntryDateDesc(String status);
 }

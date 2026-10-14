@@ -30,4 +30,8 @@ public class SellerDto extends BaseDto {
     private String otherDoc;
     private LocalDate birthDate;
     private AddressDto address;
+    private Long shopCategoryId;
+    private String shopCategoryName;
+    private Long serviceId;
+    private String serviceName;
 }

@@ -18,19 +18,21 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
-
+import com.company.efood.user.repository.CustomerRepo;
+import com.company.efood.seller.repository.SellerRepo;
+import com.company.efood.raider.repository.RaiderRepo;
+import com.company.efood.sys.utils.AppUserType;
 
 @Service
 @AllArgsConstructor
 public class CustomUserDetailsService implements UserDetailsService {
 
-
-    @Autowired
-    AppUserRepo appUserRepo;
-
-   private UserRoleAssignMasterRepo userRoleAssignMasterRepo;
-   private UserRoleAssignDetailsRepo userRoleAssignDetailsRepo;
-
+    private final AppUserRepo appUserRepo;
+    private final UserRoleAssignMasterRepo userRoleAssignMasterRepo;
+    private final UserRoleAssignDetailsRepo userRoleAssignDetailsRepo;
+    private final CustomerRepo customerRepo;
+    private final SellerRepo sellerRepo;
+    private final RaiderRepo raiderRepo;
 
     @Override
     public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
@@ -57,16 +59,32 @@ public class CustomUserDetailsService implements UserDetailsService {
             throw new InternalAuthenticationServiceException("User credentials expired with username: " + username);
         }
 
-
         List<GrantedAuthority> authorities = new ArrayList<>();
         List<UserRoleAssignDetails> userRoleAssignDetails = userRoleAssignDetailsRepo.findByMasterAppUserId(appUser.getId());
         for (UserRoleAssignDetails userRoleAssignDetail : userRoleAssignDetails) {
-
             authorities.add(new SimpleGrantedAuthority(userRoleAssignDetail.getUserRole().getName()));
         }
 
-
-
+        // Guarantee role-specific entity reference is populated so referenceId in CustomUserDetails is never null
+        if (appUser.getAppUserType() != null) {
+            switch (appUser.getAppUserType()) {
+                case CUSTOMER -> {
+                    if (appUser.getCustomer() == null && customerRepo != null) {
+                        customerRepo.findByAppUserId(appUser.getId()).ifPresent(appUser::setCustomer);
+                    }
+                }
+                case SELLER -> {
+                    if (appUser.getSeller() == null && sellerRepo != null) {
+                        sellerRepo.findByAppUserId(appUser.getId()).ifPresent(appUser::setSeller);
+                    }
+                }
+                case RAIDER -> {
+                    if (appUser.getRaider() == null && raiderRepo != null) {
+                        raiderRepo.findByAppUserId(appUser.getId()).ifPresent(appUser::setRaider);
+                    }
+                }
+            }
+        }
 
         return CustomUserDetails.build(appUser);
     }

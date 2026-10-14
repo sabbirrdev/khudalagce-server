@@ -26,6 +26,7 @@ import static com.company.efood.base.BaseConstants.PROCESS_COMPLETE_BN;
 public class UserDeviceTokenController {
 
     private final UserDeviceTokenRepo userDeviceTokenRepo;
+    private final com.company.efood.notification.repository.DeviceTokenRepo deviceTokenRepo;
     private final BaseUtils baseUtils;
     private final AuthTokenUtils authTokenUtils;
 
@@ -35,11 +36,13 @@ public class UserDeviceTokenController {
             HttpServletRequest request
     ) {
         try {
-            Long userId = requestDto.getUserId();
-            if (userId == null) {
-                try {
-                    userId = authTokenUtils.getUserIdFromRequest(request);
-                } catch (Exception ignored) {}
+            Long userId = null;
+            try {
+                userId = authTokenUtils.getUserIdFromRequest(request);
+            } catch (Exception ignored) {}
+
+            if (userId == null || userId <= 0) {
+                userId = requestDto.getUserId();
             }
             if (userId == null) {
                 userId = 0L;
@@ -68,14 +71,42 @@ public class UserDeviceTokenController {
             token.setFcmToken(requestDto.getFcmToken());
             token.setAppType(appType);
             token.setIsActive(true);
+            token.setActive(true); // BaseEntity.active — must be non-null
             token.setDeviceOs(requestDto.getDeviceOs() != null ? requestDto.getDeviceOs() : "ANDROID");
             token.setLastUpdatedAt(LocalDateTime.now());
+            // Always set audit fields (NOT NULL constraints from BaseEntity)
             if (token.getEntryDate() == null) {
                 token.setEntryDate(LocalDateTime.now());
                 token.setEntryUser(userId);
             }
 
             UserDeviceToken saved = userDeviceTokenRepo.save(token);
+
+            // Synchronize with legacy DeviceToken table
+            try {
+                com.company.efood.sys.utils.AppUserType aut = switch (appType) {
+                    case CUSTOMER -> com.company.efood.sys.utils.AppUserType.CUSTOMER;
+                    case RIDER -> com.company.efood.sys.utils.AppUserType.RAIDER;
+                    case SELLER -> com.company.efood.sys.utils.AppUserType.SELLER;
+                };
+                Optional<com.company.efood.notification.entity.DeviceToken> dtExisting = deviceTokenRepo.findByFcmToken(requestDto.getFcmToken());
+                com.company.efood.notification.entity.DeviceToken dt = dtExisting.orElseGet(com.company.efood.notification.entity.DeviceToken::new);
+                dt.setAppUserId(userId);
+                dt.setAppUserType(aut);
+                dt.setFcmToken(requestDto.getFcmToken());
+                dt.setDeviceType(requestDto.getDeviceOs() != null ? requestDto.getDeviceOs() : "ANDROID");
+                dt.setActive(true);      // BaseEntity.active — must be non-null
+                dt.setLastActiveAt(LocalDateTime.now());
+                // Always set audit fields (NOT NULL constraint in BaseEntity)
+                if (dt.getEntryDate() == null) {
+                    dt.setEntryDate(LocalDateTime.now());
+                    dt.setEntryUser(userId);
+                }
+                deviceTokenRepo.save(dt);
+            } catch (Exception syncEx) {
+                log.warn("DeviceToken sync warning: {}", syncEx.getMessage());
+            }
+
             log.info("📲 [TOKEN REGISTER] Registered FCM token for userId={}, appType={}", userId, appType);
 
             return ResponseEntity.ok(baseUtils.generateSuccessResponse(saved, PROCESS_COMPLETE, PROCESS_COMPLETE_BN));
@@ -90,6 +121,9 @@ public class UserDeviceTokenController {
         try {
             if (requestDto.getFcmToken() != null) {
                 userDeviceTokenRepo.deleteByFcmToken(requestDto.getFcmToken());
+                try {
+                    deviceTokenRepo.deleteByFcmToken(requestDto.getFcmToken());
+                } catch (Exception ignored) {}
             }
             return ResponseEntity.ok(baseUtils.generateSuccessResponse("Token unregistered", PROCESS_COMPLETE, PROCESS_COMPLETE_BN));
         } catch (Exception e) {

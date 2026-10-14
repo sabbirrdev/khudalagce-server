@@ -39,8 +39,14 @@ public class Product extends BaseEntity {
     @Column(name = "PRICE", nullable = false)
     private BigDecimal price;
 
+    @Column(name = "BUYING_PRICE", precision = 19, scale = 4)
+    private BigDecimal buyingPrice;
+
     @Column(name = "DISCOUNT_PRICE")
     private BigDecimal discountPrice;
+
+    @Column(name = "ITEM_WEIGHT")
+    private String itemWeight; // e.g. "500g", "1 kg", "250 ml", "1 L"
 
     @Column(name = "VAT", nullable = false)
     private BigDecimal vat = BigDecimal.valueOf(0.0);

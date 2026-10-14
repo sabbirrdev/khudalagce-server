@@ -25,6 +25,7 @@ public abstract class BasePurchasableItemDto extends BaseDto {
     private Integer  quantity;
     private Long variantId;
     private BigDecimal unitPrice;
+    private BigDecimal buyingPrice;
     private BigDecimal totalPrice;
 
 }

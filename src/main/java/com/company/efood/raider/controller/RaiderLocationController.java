@@ -41,6 +41,7 @@ public class RaiderLocationController {
     private final BaseUtils baseUtils;
     private final AuthTokenUtils authTokenUtils;
     private final LiveNotificationService liveNotificationService;
+    private final com.company.efood.sys.services.RiderPayoutPolicyService riderPayoutPolicyService;
 
     @PostMapping("/location")
     public BaseResponse updateLocation(@RequestBody Map<String, Object> body, HttpServletRequest request) {
@@ -80,7 +81,8 @@ public class RaiderLocationController {
             // Broadcast to all active delivery orders assigned to this rider
             List<Order> activeOrders = orderRepo.findAll().stream()
                     .filter(o -> o.getRaider() != null && raider.getId().equals(o.getRaider().getId())
-                            && (o.getStatus() == OrderStatus.ASSIGNED || o.getStatus() == OrderStatus.PICKED_UP))
+                            && (o.getStatus() == OrderStatus.ASSIGNED || o.getStatus() == OrderStatus.PICKED_UP
+                                    || o.getStatus() == OrderStatus.ON_THE_WAY || o.getStatus() == OrderStatus.IN_TRANSIT))
                     .collect(Collectors.toList());
 
             for (Order o : activeOrders) {
@@ -183,7 +185,10 @@ public class RaiderLocationController {
 
             double todayDeliveryEarnings = allDelivered.stream()
                     .filter(o -> o.getEntryDate() != null && o.getEntryDate().toLocalDate().isEqual(today))
-                    .mapToDouble(o -> o.getDeliveryFee() != null ? o.getDeliveryFee().doubleValue() : 0.0)
+                    .mapToDouble(o -> {
+                        java.math.BigDecimal fee = o.getDeliveryFee() != null ? o.getDeliveryFee() : java.math.BigDecimal.ZERO;
+                        return riderPayoutPolicyService.calculateRiderShare(fee, null).doubleValue();
+                    })
                     .sum();
 
             double todayRideEarnings = completedRides.stream()
@@ -193,7 +198,10 @@ public class RaiderLocationController {
 
             double weekDeliveryEarnings = allDelivered.stream()
                     .filter(o -> o.getEntryDate() != null && !o.getEntryDate().toLocalDate().isBefore(weekStart))
-                    .mapToDouble(o -> o.getDeliveryFee() != null ? o.getDeliveryFee().doubleValue() : 0.0)
+                    .mapToDouble(o -> {
+                        java.math.BigDecimal fee = o.getDeliveryFee() != null ? o.getDeliveryFee() : java.math.BigDecimal.ZERO;
+                        return riderPayoutPolicyService.calculateRiderShare(fee, null).doubleValue();
+                    })
                     .sum();
 
             double weekRideEarnings = completedRides.stream()
@@ -202,7 +210,10 @@ public class RaiderLocationController {
                     .sum();
 
             double totalDeliveryEarnings = allDelivered.stream()
-                    .mapToDouble(o -> o.getDeliveryFee() != null ? o.getDeliveryFee().doubleValue() : 0.0)
+                    .mapToDouble(o -> {
+                        java.math.BigDecimal fee = o.getDeliveryFee() != null ? o.getDeliveryFee() : java.math.BigDecimal.ZERO;
+                        return riderPayoutPolicyService.calculateRiderShare(fee, null).doubleValue();
+                    })
                     .sum();
 
             double totalRideEarnings = completedRides.stream()

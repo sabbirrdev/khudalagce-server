@@ -12,6 +12,7 @@ import com.company.efood.sys.dto.PaymentDto;
 import com.company.efood.sys.dto.ProductDto;
 import com.company.efood.sys.dto.AddressDto;
 import com.company.efood.sys.entity.*;
+import com.company.efood.sys.event.OrderStatusChangedEvent;
 import com.company.efood.sys.repository.*;
 import com.company.efood.sys.services.OrderService;
 import com.company.efood.sys.utils.AddressType;
@@ -32,11 +33,14 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import com.company.efood.sys.utils.AppUserType;
 
 
 @Service
@@ -45,6 +49,7 @@ public class OrderServiceImpl implements OrderService {
 
     private final OrderRepo orderRepository;
     private final CustomerRepo customerRepo;
+    private final AppUserRepo appUserRepo;
     private final BaseUtils baseUtils;
     private final OrderRepo orderRepo;
     private final PaymentService paymentService;
@@ -61,6 +66,10 @@ public class OrderServiceImpl implements OrderService {
     private final org.springframework.context.ApplicationEventPublisher applicationEventPublisher;
     private final com.company.efood.user.services.LoyaltyService loyaltyService;
     private final com.company.efood.raider.repository.RaiderLiveLocationRepo raiderLiveLocationRepo;
+    private final com.company.efood.sys.services.DeliveryFeeCalculationService deliveryFeeCalculationService;
+    private final com.company.efood.zone.repository.ZoneRepository zoneRepository;
+    private final com.company.efood.sys.services.OrderFinancialLedgerService orderFinancialLedgerService;
+    private final com.company.efood.sys.services.RiderPayoutPolicyService riderPayoutPolicyService;
 
 
     @Transactional(readOnly = true)
@@ -132,13 +141,23 @@ public class OrderServiceImpl implements OrderService {
         order.setUpdateUser(sellerUserId);
         Order updatedOrder = orderRepo.save(order);
 
-        applicationEventPublisher.publishEvent(new com.company.efood.sys.event.OrderStatusChangedEvent(
+        applicationEventPublisher.publishEvent(new OrderStatusChangedEvent(
                 this, updatedOrder.getId(), prevStatus, newStatus, sellerUserId));
+
+        if (newStatus == OrderStatus.DELIVERED || newStatus == OrderStatus.COMPLETED) {
+            try {
+                orderFinancialLedgerService.recordOrderCompletion(updatedOrder);
+            } catch (Exception e) {
+                System.err.println("⚠️ [ORDER SERVICE] Failed to record financial ledger: " + e.getMessage());
+            }
+        }
 
         String statusMsg = switch (newStatus) {
             case ACCEPTED -> "Order accepted by restaurant/shop";
             case PREPARING -> "Order is being prepared";
-            case PICKED_UP, COMPLETED -> "Order is ready for pickup";
+            case ASSIGNED -> "Order is ready for pickup";
+            case PICKED_UP -> "Order picked up by rider";
+            case DELIVERED, COMPLETED -> "Order delivered successfully";
             case REJECTED, CANCELLED -> "Order was rejected by restaurant/shop";
             default -> "Order status updated";
         };
@@ -146,12 +165,17 @@ public class OrderServiceImpl implements OrderService {
         liveNotificationService.sendOrderStatusUpdate(updatedOrder.getId(), newStatus.name(), statusMsg);
 
         try {
-            if (newStatus == OrderStatus.PREPARING) {
-                String shopName = (order.getBranch() != null && order.getBranch().getShop() != null) ? order.getBranch().getShop().getShopName() : "Shop";
-                String address = (order.getDeliveryAddress() != null) ? order.getDeliveryAddress().getAddress() : "";
-                fcmNotificationService.notifyRidersOrderPreparing(updatedOrder.getId(), shopName, address);
+            String shopName = (order.getBranch() != null && order.getBranch().getShop() != null) ? order.getBranch().getShop().getShopName() : "Shop";
+            String address = (order.getDeliveryAddress() != null) ? order.getDeliveryAddress().getAddress() : "";
+
+            if (newStatus == OrderStatus.ASSIGNED) {
+                // Order ready for pickup — broadcast to all available riders
+                fcmNotificationService.notifyRidersOrderReadyForPickup(updatedOrder.getId(), shopName, address);
             }
-            if (order.getCustomer() != null && order.getCustomer().getAppUser() != null) {
+
+            // Only notify customer on ACCEPTED or CANCELLED
+            if ((newStatus == OrderStatus.ACCEPTED || newStatus == OrderStatus.CANCELLED || newStatus == OrderStatus.REJECTED)
+                    && order.getCustomer() != null && order.getCustomer().getAppUser() != null) {
                 fcmNotificationService.notifyCustomerOrderStatus(order.getCustomer().getAppUser().getId(), updatedOrder.getId(), newStatus.name(), statusMsg);
             }
         } catch (Exception e) {
@@ -170,12 +194,33 @@ public class OrderServiceImpl implements OrderService {
         System.out.println("📦 [ORDER SERVICE] OrderDto branchId=" + orderDto.getBranchId());
         System.out.println("📦 [ORDER SERVICE] OrderDto items count=" + (orderDto.getItems() != null ? orderDto.getItems().size() : 0));
 
-        Long customerId = CurrentUserContext.getReferenceId();
-        System.out.println("👤 [ORDER SERVICE] CurrentUserContext.getReferenceId() = " + customerId);
-        if (customerId == null) {
-            System.out.println("❌ [ORDER SERVICE] Customer context is null — user not authenticated or referenceId missing from JWT");
+        Long refCustomerId = CurrentUserContext.getReferenceId();
+        Customer customer = null;
+        if (refCustomerId != null) {
+            customer = customerRepo.findById(refCustomerId).orElse(null);
+        }
+        if (customer == null && userId != null) {
+            customer = customerRepo.findByAppUserId(userId).orElse(null);
+        }
+        if (customer == null && CurrentUserContext.getUserId() != null) {
+            customer = customerRepo.findByAppUserId(CurrentUserContext.getUserId()).orElse(null);
+        }
+        if (customer == null && (userId != null || CurrentUserContext.getUserId() != null)) {
+            Long uid = userId != null ? userId : CurrentUserContext.getUserId();
+            AppUser appUser = appUserRepo.findById(uid).orElse(null);
+            if (appUser != null) {
+                Customer newCust = new Customer(appUser);
+                newCust.setFullName(appUser.getDisplayName() != null ? appUser.getDisplayName() : appUser.getUsername());
+                customer = customerRepo.save(newCust);
+                System.out.println("👤 [ORDER SERVICE] Auto-created Customer profile id=" + customer.getId() + " for appUser=" + uid);
+            }
+        }
+        if (customer == null) {
+            System.out.println("❌ [ORDER SERVICE] Customer not found for referenceId=" + refCustomerId + " or userId=" + userId);
             throw new IllegalArgumentException("Customer context not found");
         }
+        final Long customerId = customer.getId();
+        System.out.println("👤 [ORDER SERVICE] Customer resolved: id=" + customer.getId());
 
         Address address = null;
         if (orderDto.getDeliveryAddress() != null) {
@@ -190,6 +235,26 @@ public class OrderServiceImpl implements OrderService {
                 System.out.println("🔍 [ORDER SERVICE] Looking up existing address by id=" + orderDto.getDeliveryAddress().getId());
                 address = addressRepo.findById(orderDto.getDeliveryAddress().getId()).orElse(null);
                 System.out.println("🔍 [ORDER SERVICE] Existing address lookup result: " + (address != null ? "FOUND id=" + address.getId() : "NOT FOUND"));
+            }
+
+            if (address == null) {
+                // Enterprise reuse: Check if user already has an active address matching text & type
+                final String targetText = orderDto.getDeliveryAddress().getAddress() != null
+                        ? orderDto.getDeliveryAddress().getAddress().trim() : "";
+                final AddressType targetType = orderDto.getDeliveryAddress().getAddressType() != null
+                        ? orderDto.getDeliveryAddress().getAddressType() : AddressType.HOME_ADDRESS;
+
+                if (!targetText.isEmpty()) {
+                    List<Address> userAddrs = addressRepo.findByEntryUserAndActiveTrue(userId);
+                    address = userAddrs.stream()
+                            .filter(a -> a.getAddress() != null && a.getAddress().trim().equalsIgnoreCase(targetText)
+                                    && (a.getAddressType() == targetType))
+                            .findFirst()
+                            .orElse(null);
+                    if (address != null) {
+                        System.out.println("♻️ [ORDER SERVICE] Reusing existing user address id=" + address.getId() + " instead of creating duplicate");
+                    }
+                }
             }
 
             if (address == null) {
@@ -236,22 +301,6 @@ public class OrderServiceImpl implements OrderService {
             throw new IllegalArgumentException("At least one order item is required for checkout");
         }
 
-        // BUG FIX: `CurrentUserContext.getReferenceId()` is the Customer table's
-        // own primary key for a CUSTOMER-role user (see CurrentUserInfo /
-        // CartServiceImpl's identical, correct usage), NOT the linked
-        // AppUser's id. This used to call `customerRepo.findByAppUserId(referenceId)`
-        // — comparing a Customer.id against an AppUser.id — which only matched
-        // by coincidence and otherwise silently fell back to
-        // `customerRepo.findAll().stream().findFirst()`, attaching the order
-        // (and clearing the cart of) a completely different, effectively
-        // random customer. That's how an order could be confirmed in the DB
-        // while "my orders" for the customer who actually placed it stayed
-        // empty, and their cart was left un-cleared. Look the customer up by
-        // their own id and fail loudly instead of guessing.
-        Customer customer = customerRepo.findById(customerId)
-                .orElseThrow(() -> new IllegalArgumentException("Customer not found: " + customerId));
-        System.out.println("👤 [ORDER SERVICE] Customer found: id=" + customer.getId());
-
         // Check if items span multiple branches — use item.branchId first, then product.branchId
         java.util.Set<Long> uniqueBranches = new java.util.HashSet<>();
         if (orderDto.getItems() != null) {
@@ -283,23 +332,32 @@ public class OrderServiceImpl implements OrderService {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         System.out.println("🧾 [ORDER SERVICE] Order items mapped: count=" + orderItems.size() + " | itemTotal=" + itemTotal);
 
-        BigDecimal deliveryFee = orderDto.getDeliveryFee() != null && orderDto.getDeliveryFee().compareTo(BigDecimal.ZERO) > 0
-                ? orderDto.getDeliveryFee()
-                : BigDecimal.valueOf(10.0);
-        BigDecimal discount = orderDto.getDiscount() != null ? orderDto.getDiscount() : BigDecimal.ZERO;
+        int totalWeightGrams = calculateTotalWeightGrams(orderItems);
+        com.company.efood.sys.dto.DeliveryFeeResult feeResult = deliveryFeeCalculationService.calculate(branch.getId(), address.getId(), totalWeightGrams);
+        if (!feeResult.isDeliverable()) {
+            System.out.println("❌ [ORDER SERVICE] Order not deliverable: " + feeResult.getReason());
+            throw new IllegalArgumentException(feeResult.getReason() != null ? feeResult.getReason() : "Order cannot be delivered to this location");
+        }
+        BigDecimal deliveryFee = feeResult.getFee();
+        System.out.println("🚚 [ORDER SERVICE] Dynamic delivery fee applied: " + deliveryFee + " (basis=" + feeResult.getBasis() + ", distance=" + feeResult.getDistanceKm() + "km, weight=" + totalWeightGrams + "g)");
+        BigDecimal discount = BigDecimal.ZERO;
         BigDecimal tax = orderDto.getTax() != null ? orderDto.getTax() : BigDecimal.ZERO;
 
-        BigDecimal preLoyaltyTotal = itemTotal.add(deliveryFee).subtract(discount).add(tax);
-        BigDecimal loyaltyDiscount = BigDecimal.ZERO;
+        // Mutual exclusivity rule: customer can be discounted by loyalty points OR coupon, only ONE applicable at a time
         if (orderDto.getLoyaltyPointsToRedeem() != null && orderDto.getLoyaltyPointsToRedeem() > 0) {
-            loyaltyDiscount = loyaltyService.redeemPointsForOrder(
+            // Loyalty points take precedence, ignore coupon
+            orderDto.setCouponId(null);
+            BigDecimal preLoyaltyTotal = itemTotal.add(deliveryFee).add(tax);
+            BigDecimal loyaltyDiscount = loyaltyService.redeemPointsForOrder(
                     customer.getId(),
                     null,
                     orderDto.getLoyaltyPointsToRedeem(),
                     preLoyaltyTotal
             );
-            discount = discount.add(loyaltyDiscount);
+            discount = loyaltyDiscount;
             System.out.println("🎁 [ORDER SERVICE] Applied loyalty discount: " + loyaltyDiscount + " using " + orderDto.getLoyaltyPointsToRedeem() + " points");
+        } else if (orderDto.getDiscount() != null && orderDto.getDiscount().compareTo(BigDecimal.ZERO) > 0) {
+            discount = orderDto.getDiscount();
         }
 
         BigDecimal grandTotal = itemTotal.add(deliveryFee).subtract(discount).add(tax);
@@ -316,6 +374,9 @@ public class OrderServiceImpl implements OrderService {
         order.setDiscount(discount);
         order.setTax(tax);
         order.setDeliveryFee(deliveryFee);
+        if (feeResult.getZoneId() != null) {
+            zoneRepository.findById(feeResult.getZoneId()).ifPresent(order::setZone);
+        }
         order.setEntryUser(userId);
         order.setActive(true);
         baseUtils.setEntryUserInfo(order);
@@ -345,6 +406,37 @@ public class OrderServiceImpl implements OrderService {
         }
 
         liveNotificationService.sendOrderStatusUpdate(savedOrder.getId(), OrderStatus.PLACED.name(), "Order placed successfully");
+
+        // 🔔 Dispatch Push + In-App Notification to Seller & Customer
+        try {
+            Branch b = savedOrder.getBranch();
+            if (b != null && b.getShop() != null && b.getShop().getSeller() != null) {
+                com.company.efood.seller.entity.Seller seller = b.getShop().getSeller();
+                if (seller.getAppUser() != null) {
+                    String customerName = (customer != null && customer.getFullName() != null && !customer.getFullName().isBlank())
+                            ? customer.getFullName()
+                            : "Customer";
+                    fcmNotificationService.notifySellerNewOrder(
+                            seller.getAppUser().getId(),
+                            savedOrder.getId(),
+                            customerName,
+                            savedOrder.getTotalAmount()
+                    );
+                    System.out.println("📢 [ORDER SERVICE] Notified seller userId=" + seller.getAppUser().getId() + " for order #" + savedOrder.getId());
+                }
+            }
+            if (customer != null && customer.getAppUser() != null) {
+                fcmNotificationService.notifyCustomerOrderStatus(
+                        customer.getAppUser().getId(),
+                        savedOrder.getId(),
+                        "PLACED",
+                        "Your order #" + savedOrder.getId() + " has been placed successfully."
+                );
+            }
+        } catch (Exception ex) {
+            System.err.println("⚠️ [ORDER SERVICE] Failed to dispatch order placement notification: " + ex.getMessage());
+        }
+
         System.out.println("🎉 [ORDER SERVICE] Order placement COMPLETE. Order ID=" + savedOrder.getId());
         System.out.println("==========================================================");
         return savedOrder.getId();
@@ -357,16 +449,53 @@ public class OrderServiceImpl implements OrderService {
             throw new IllegalArgumentException("At least one order item is required for checkout");
         }
 
-        Long resolvedCustomerId = CurrentUserContext.getReferenceId();
-        if (resolvedCustomerId == null) resolvedCustomerId = userId;
-        final Long customerId = resolvedCustomerId;
-        Customer customer = customerRepo.findById(customerId)
-                .orElseThrow(() -> new IllegalArgumentException("Customer not found: " + customerId));
+        Long refCustomerId = CurrentUserContext.getReferenceId();
+        Customer customer = null;
+        if (refCustomerId != null) {
+            customer = customerRepo.findById(refCustomerId).orElse(null);
+        }
+        if (customer == null && userId != null) {
+            customer = customerRepo.findByAppUserId(userId).orElse(null);
+        }
+        if (customer == null && CurrentUserContext.getUserId() != null) {
+            customer = customerRepo.findByAppUserId(CurrentUserContext.getUserId()).orElse(null);
+        }
+        if (customer == null && (userId != null || CurrentUserContext.getUserId() != null)) {
+            Long uid = userId != null ? userId : CurrentUserContext.getUserId();
+            AppUser appUser = appUserRepo.findById(uid).orElse(null);
+            if (appUser != null) {
+                Customer newCust = new Customer(appUser);
+                newCust.setFullName(appUser.getDisplayName() != null ? appUser.getDisplayName() : appUser.getUsername());
+                customer = customerRepo.save(newCust);
+            }
+        }
+        if (customer == null) {
+            throw new IllegalArgumentException("Customer context not found");
+        }
 
         Address address = null;
         if (orderDto.getDeliveryAddress() != null) {
             if (orderDto.getDeliveryAddress().getId() != null) {
                 address = addressRepo.findById(orderDto.getDeliveryAddress().getId()).orElse(null);
+            }
+            if (address == null) {
+                // Enterprise reuse: Check if user already has an active address matching text & type
+                final String targetText = orderDto.getDeliveryAddress().getAddress() != null
+                        ? orderDto.getDeliveryAddress().getAddress().trim() : "";
+                final AddressType targetType = orderDto.getDeliveryAddress().getAddressType() != null
+                        ? orderDto.getDeliveryAddress().getAddressType() : AddressType.HOME_ADDRESS;
+
+                if (!targetText.isEmpty()) {
+                    List<Address> userAddrs = addressRepo.findByEntryUserAndActiveTrue(userId);
+                    address = userAddrs.stream()
+                            .filter(a -> a.getAddress() != null && a.getAddress().trim().equalsIgnoreCase(targetText)
+                                    && (a.getAddressType() == targetType))
+                            .findFirst()
+                            .orElse(null);
+                    if (address != null) {
+                        System.out.println("♻️ [ORDER SERVICE] Reusing existing user address id=" + address.getId() + " in placeMultiOrder");
+                    }
+                }
             }
             if (address == null) {
                 Address newAddress = new Address();
@@ -433,9 +562,14 @@ public class OrderServiceImpl implements OrderService {
                     .map(OrderItem::getTotalPrice)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-            BigDecimal deliveryFee = orderDto.getDeliveryFee() != null && orderDto.getDeliveryFee().compareTo(BigDecimal.ZERO) > 0
-                    ? orderDto.getDeliveryFee()
-                    : BigDecimal.valueOf(10.0);
+            int branchTotalWeightGrams = calculateTotalWeightGrams(orderItems);
+            com.company.efood.sys.dto.DeliveryFeeResult branchFeeResult = deliveryFeeCalculationService.calculate(branch.getId(), address.getId(), branchTotalWeightGrams);
+            if (!branchFeeResult.isDeliverable()) {
+                System.out.println("❌ [ORDER SERVICE] Multi-order branch #" + branch.getId() + " not deliverable: " + branchFeeResult.getReason());
+                throw new IllegalArgumentException(branchFeeResult.getReason() != null ? branchFeeResult.getReason() : "Delivery not possible for branch " + branch.getName());
+            }
+            BigDecimal deliveryFee = branchFeeResult.getFee();
+            System.out.println("🚚 [ORDER SERVICE] Dynamic delivery fee for multi-order branch #" + branch.getId() + ": " + deliveryFee + " (weight=" + branchTotalWeightGrams + "g)");
             BigDecimal discount = discountPerBranch;
             BigDecimal tax = BigDecimal.ZERO;
             BigDecimal grandTotal = itemTotal.add(deliveryFee).subtract(discount).add(tax);
@@ -450,6 +584,9 @@ public class OrderServiceImpl implements OrderService {
             branchOrder.setDiscount(discount);
             branchOrder.setTax(tax);
             branchOrder.setDeliveryFee(deliveryFee);
+            if (branchFeeResult.getZoneId() != null) {
+                zoneRepository.findById(branchFeeResult.getZoneId()).ifPresent(branchOrder::setZone);
+            }
             branchOrder.setEntryUser(userId);
             branchOrder.setActive(true);
             baseUtils.setEntryUserInfo(branchOrder);
@@ -465,6 +602,35 @@ public class OrderServiceImpl implements OrderService {
             paymentService.initiatePayment(paymentDto, userId);
 
             liveNotificationService.sendOrderStatusUpdate(savedBranchOrder.getId(), OrderStatus.PLACED.name(), "Order placed for branch " + branch.getName());
+
+            // 🔔 Dispatch Push + In-App Notification to Seller & Customer
+            try {
+                if (branch != null && branch.getShop() != null && branch.getShop().getSeller() != null) {
+                    com.company.efood.seller.entity.Seller seller = branch.getShop().getSeller();
+                    if (seller.getAppUser() != null) {
+                        String customerName = (customer != null && customer.getFullName() != null && !customer.getFullName().isBlank())
+                                ? customer.getFullName()
+                                : "Customer";
+                        fcmNotificationService.notifySellerNewOrder(
+                                seller.getAppUser().getId(),
+                                savedBranchOrder.getId(),
+                                customerName,
+                                savedBranchOrder.getTotalAmount()
+                        );
+                    }
+                }
+                if (customer != null && customer.getAppUser() != null) {
+                    fcmNotificationService.notifyCustomerOrderStatus(
+                            customer.getAppUser().getId(),
+                            savedBranchOrder.getId(),
+                            "PLACED",
+                            "Your order #" + savedBranchOrder.getId() + " has been placed successfully."
+                    );
+                }
+            } catch (Exception ex) {
+                System.err.println("⚠️ [ORDER SERVICE] Failed to notify on multi-order branch placement: " + ex.getMessage());
+            }
+
             createdOrderIds.add(savedBranchOrder.getId());
         }
 
@@ -594,23 +760,27 @@ public class OrderServiceImpl implements OrderService {
         }
 
         OrderStatus newStatus;
-        try {
-            newStatus = OrderStatus.valueOf(status.toUpperCase());
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Invalid status value: " + status);
+        if ("PICKED".equalsIgnoreCase(status) || "PICKED_UP".equalsIgnoreCase(status)) {
+            newStatus = OrderStatus.ON_THE_WAY;
+        } else {
+            try {
+                newStatus = OrderStatus.valueOf(status.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("Invalid status value: " + status);
+            }
         }
 
-        // Allow only valid rider transitions
+        // Allow valid sequential rider transitions
         OrderStatus currentStatus = order.getStatus();
         boolean validTransition =
-                (currentStatus == OrderStatus.ASSIGNED && newStatus == OrderStatus.PICKED_UP) ||
-                (currentStatus == OrderStatus.PICKED_UP && newStatus == OrderStatus.ON_THE_WAY) ||
-                (currentStatus == OrderStatus.ON_THE_WAY && newStatus == OrderStatus.DELIVERED) ||
+                (currentStatus == OrderStatus.ASSIGNED && (newStatus == OrderStatus.PICKED_UP || newStatus == OrderStatus.ON_THE_WAY)) ||
+                (currentStatus == OrderStatus.PICKED_UP && (newStatus == OrderStatus.ON_THE_WAY || newStatus == OrderStatus.DELIVERED || newStatus == OrderStatus.COMPLETED)) ||
+                (currentStatus == OrderStatus.ON_THE_WAY && (newStatus == OrderStatus.DELIVERED || newStatus == OrderStatus.COMPLETED)) ||
                 (currentStatus == OrderStatus.DELIVERED && newStatus == OrderStatus.COMPLETED);
 
         if (!validTransition) {
             throw new IllegalArgumentException("Invalid status transition from " + currentStatus + " to " + newStatus
-                    + ". Valid: ASSIGNED→PICKED_UP, PICKED_UP→ON_THE_WAY, ON_THE_WAY→DELIVERED, DELIVERED→COMPLETED");
+                    + ". Valid transitions: ASSIGNED → ON_THE_WAY / PICKED_UP, ON_THE_WAY → DELIVERED / COMPLETED");
         }
 
         OrderStatus prevStatus = order.getStatus();
@@ -620,6 +790,14 @@ public class OrderServiceImpl implements OrderService {
 
         applicationEventPublisher.publishEvent(new com.company.efood.sys.event.OrderStatusChangedEvent(
                 this, updatedOrder.getId(), prevStatus, newStatus, riderId));
+
+        if (newStatus == OrderStatus.DELIVERED || newStatus == OrderStatus.COMPLETED) {
+            try {
+                orderFinancialLedgerService.recordOrderCompletion(updatedOrder);
+            } catch (Exception e) {
+                System.err.println("⚠️ [ORDER SERVICE] Failed to record financial ledger: " + e.getMessage());
+            }
+        }
 
         String statusMsg = switch (newStatus) {
             case PICKED_UP -> "Order picked up by rider";
@@ -631,13 +809,8 @@ public class OrderServiceImpl implements OrderService {
 
         liveNotificationService.sendOrderStatusUpdate(updatedOrder.getId(), newStatus.name(), statusMsg);
 
-        try {
-            if (order.getCustomer() != null && order.getCustomer().getAppUser() != null) {
-                fcmNotificationService.notifyCustomerOrderStatus(order.getCustomer().getAppUser().getId(), updatedOrder.getId(), newStatus.name(), statusMsg);
-            }
-        } catch (Exception e) {
-            System.err.println("Failed to dispatch push notification: " + e.getMessage());
-        }
+        // No push notification needed for rider status updates (PICKED_UP, ON_THE_WAY, DELIVERED)
+        // Real-time updates are handled via liveNotificationService above
 
         return generateDto(updatedOrder);
     }
@@ -691,8 +864,11 @@ public class OrderServiceImpl implements OrderService {
     @Override
     public Page<OrderDto> getAssignedOrders(BasePageableRequest basePageableRequest) {
         PageRequest pageRequest = baseUtils.getPageRequest(basePageableRequest.getPage(), basePageableRequest.getSize());
-        // Only return orders that are ASSIGNED/Ready but NOT YET CLAIMED by any rider
-        Page<Order> page = orderRepo.findByStatusAndRaiderIsNull(OrderStatus.ASSIGNED, pageRequest);
+        // Return orders that are PREPARING or ASSIGNED but NOT YET CLAIMED by any rider
+        Page<Order> page = orderRepo.findByStatusInAndRaiderIsNull(
+                java.util.List.of(OrderStatus.PREPARING, OrderStatus.ASSIGNED),
+                pageRequest
+        );
         return new PageImpl<>(convertEntityListToDtoList(page.stream()), pageRequest, page.getTotalElements());
     }
 
@@ -708,12 +884,59 @@ public class OrderServiceImpl implements OrderService {
             throw new IllegalArgumentException("Rider profile not found for user: " + riderUserId);
         }
 
+        // Admin Approval Gate: locked until verified by admin
+        if (!Boolean.TRUE.equals(raider.getIsApproved())) {
+            throw new IllegalStateException("Your rider account is locked pending admin document verification and approval.");
+        }
+
+        // Concurrency Guard: prevent double-accept race conditions
+        if (order.getRaider() != null) {
+            throw new IllegalStateException("This order has already been claimed by another rider.");
+        }
+
+        OrderStatus prevStatus = order.getStatus();
         order.setRaider(raider);
         order.setStatus(OrderStatus.ASSIGNED);
         order.setUpdateUser(riderUserId);
         Order saved = orderRepo.save(order);
+
+        applicationEventPublisher.publishEvent(new com.company.efood.sys.event.OrderStatusChangedEvent(
+                this, saved.getId(), prevStatus, OrderStatus.ASSIGNED, riderUserId));
+
         liveNotificationService.sendRiderAssignment(saved.getId(), raider.getId(), raider.getVehicleType());
         liveNotificationService.sendOrderStatusUpdate(saved.getId(), OrderStatus.ASSIGNED.name(), "Rider accepted delivery");
+
+        try {
+            String riderName = (raider.getFullName() != null && !raider.getFullName().isBlank()) ? raider.getFullName() : "A rider";
+            if (order.getCustomer() != null && order.getCustomer().getAppUser() != null) {
+                fcmNotificationService.notifyCustomerOrderStatus(
+                        order.getCustomer().getAppUser().getId(),
+                        saved.getId(),
+                        "ASSIGNED",
+                        riderName + " has accepted your order and is heading for pickup!"
+                );
+            }
+            if (order.getBranch() != null && order.getBranch().getShop() != null && order.getBranch().getShop().getSeller() != null) {
+                com.company.efood.seller.entity.Seller seller = order.getBranch().getShop().getSeller();
+                if (seller.getAppUser() != null) {
+                    Map<String, String> data = new HashMap<>();
+                    data.put("orderId", String.valueOf(saved.getId()));
+                    data.put("type", "RIDER_ACCEPTED");
+                    fcmNotificationService.sendNotificationToUser(
+                            seller.getAppUser().getId(),
+                            AppUserType.SELLER,
+                            "🛵 Rider Assigned",
+                            riderName + " has accepted Order #" + saved.getId() + " for delivery.",
+                            data,
+                            "RIDER_ACCEPTED",
+                            saved.getId()
+                    );
+                }
+            }
+        } catch (Exception ex) {
+            System.err.println("⚠️ [ORDER SERVICE] Failed to notify on rider acceptance: " + ex.getMessage());
+        }
+
         return generateDto(saved);
     }
 
@@ -735,6 +958,7 @@ public class OrderServiceImpl implements OrderService {
 
         BigDecimal unitPrice = itemDto.getUnitPrice() != null ? itemDto.getUnitPrice() : product.getPrice();
         BigDecimal totalPrice = unitPrice.multiply(BigDecimal.valueOf(itemDto.getQuantity()));
+        BigDecimal buyingPrice = product.getBuyingPrice() != null ? product.getBuyingPrice() : BigDecimal.ZERO;
 
         product.setQty(product.getQty() - itemDto.getQuantity());
         productRepo.save(product);
@@ -744,6 +968,7 @@ public class OrderServiceImpl implements OrderService {
         orderItem.setQuantity(itemDto.getQuantity());
         orderItem.setUnitPrice(unitPrice);
         orderItem.setTotalPrice(totalPrice);
+        orderItem.setBuyingPrice(buyingPrice);
         orderItem.setEntryUser(userId);
         orderItem.setActive(true);
         baseUtils.setEntryUserInfo(orderItem);
@@ -824,9 +1049,32 @@ public class OrderServiceImpl implements OrderService {
         }
         if (entity.getBranch() != null) {
             dto.setBranchId(entity.getBranch().getId());
+            if (entity.getBranch().getShop() != null) {
+                Shop s = entity.getBranch().getShop();
+                dto.setShopId(s.getId());
+                dto.setShopName(s.getShopName());
+                if (s.getShopCategory() != null) {
+                    dto.setShopCategoryId(s.getShopCategory().getId());
+                    dto.setShopCategoryName(s.getShopCategory().getName());
+                    if (s.getShopCategory().getService() != null) {
+                        dto.setServiceId(s.getShopCategory().getService().getId());
+                        dto.setServiceName(s.getShopCategory().getService().getName());
+                        dto.setServiceCode(s.getShopCategory().getService().getCode());
+                    }
+                }
+            }
         }
         if (entity.getDeliveryFee() != null) {
             dto.setDeliveryFee(entity.getDeliveryFee());
+            if (riderPayoutPolicyService != null) {
+                try {
+                    dto.setRiderEarnings(riderPayoutPolicyService.calculateRiderShare(entity.getDeliveryFee(), null));
+                } catch (Exception ignored) {}
+            }
+        }
+        if (entity.getZone() != null) {
+            dto.setZoneId(entity.getZone().getId());
+            dto.setZoneName(entity.getZone().getName());
         }
         return dto;
     }
@@ -871,7 +1119,9 @@ public class OrderServiceImpl implements OrderService {
 
         Raider raider = order.getRaider();
         boolean isLiveTrackingActive = order.getStatus() == OrderStatus.ASSIGNED
-                || order.getStatus() == OrderStatus.PICKED_UP;
+                || order.getStatus() == OrderStatus.PICKED_UP
+                || order.getStatus() == OrderStatus.ON_THE_WAY
+                || order.getStatus() == OrderStatus.IN_TRANSIT;
 
         tracking.put("isLiveTrackingActive", isLiveTrackingActive);
 
@@ -896,5 +1146,44 @@ public class OrderServiceImpl implements OrderService {
         }
 
         return tracking;
+    }
+
+    private int calculateTotalWeightGrams(List<OrderItem> orderItems) {
+        if (orderItems == null || orderItems.isEmpty()) return 0;
+        int total = 0;
+        for (OrderItem item : orderItems) {
+            if (item.getProduct() != null && item.getProduct().getItemWeight() != null) {
+                int itemGrams = parseWeightStringToGrams(item.getProduct().getItemWeight());
+                int qty = item.getQuantity() != null ? item.getQuantity() : 1;
+                total += (itemGrams * qty);
+            }
+        }
+        return total;
+    }
+
+    private int parseWeightStringToGrams(String weightStr) {
+        if (weightStr == null || weightStr.trim().isEmpty()) return 0;
+        try {
+            String lower = weightStr.trim().toLowerCase();
+            if (lower.contains("kg")) {
+                String num = lower.replaceAll("[^0-9.]", "").trim();
+                return (int) Math.round(Double.parseDouble(num) * 1000.0);
+            } else if (lower.contains("gm") || lower.contains("gram") || lower.contains("g")) {
+                String num = lower.replaceAll("[^0-9.]", "").trim();
+                return (int) Math.round(Double.parseDouble(num));
+            } else if (lower.contains("l") || lower.contains("ltr") || lower.contains("liter")) {
+                String num = lower.replaceAll("[^0-9.]", "").trim();
+                return (int) Math.round(Double.parseDouble(num) * 1000.0);
+            } else if (lower.contains("ml")) {
+                String num = lower.replaceAll("[^0-9.]", "").trim();
+                return (int) Math.round(Double.parseDouble(num));
+            } else {
+                String num = lower.replaceAll("[^0-9.]", "").trim();
+                if (!num.isEmpty()) {
+                    return (int) Math.round(Double.parseDouble(num));
+                }
+            }
+        } catch (Exception ignored) {}
+        return 0;
     }
 }

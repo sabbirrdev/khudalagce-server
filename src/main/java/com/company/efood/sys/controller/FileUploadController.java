@@ -16,7 +16,7 @@ import java.util.List;
 import static com.company.efood.base.BaseConstants.*;
 
 @RestController
-@RequestMapping(PRIVET_ENDPOINT+"files")
+@RequestMapping({PRIVET_ENDPOINT + "files", PUBLIC_ENDPOINT + "files"})
 public class FileUploadController {
 
     private final FileService fileService;

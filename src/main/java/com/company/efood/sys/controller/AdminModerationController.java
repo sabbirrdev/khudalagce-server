@@ -41,10 +41,10 @@ public class AdminModerationController {
     public BaseResponse getPendingApprovals() {
         try {
             Map<String, Object> payload = new HashMap<>();
-            payload.put("sellerPendingCount", sellerRepo.findAll().stream().filter(s -> !Boolean.TRUE.equals(s.getIsApproved())).count());
-            payload.put("raiderPendingCount", raiderRepo.findAll().stream().filter(r -> !Boolean.TRUE.equals(r.getIsApproved())).count());
-            payload.put("shopPendingCount", shopRepo.findAll().stream().filter(s -> !Boolean.TRUE.equals(s.getIsApproved())).count());
-            payload.put("productPendingCount", productRepo.findAll().stream().filter(p -> !Boolean.TRUE.equals(p.getIsApproved())).count());
+            payload.put("sellerPendingCount", sellerRepo.countByIsApprovedFalseOrIsApprovedIsNull());
+            payload.put("raiderPendingCount", raiderRepo.countByIsApprovedFalseOrIsApprovedIsNull());
+            payload.put("shopPendingCount", shopRepo.countByIsApprovedFalseOrIsApprovedIsNull());
+            payload.put("productPendingCount", productRepo.countByIsApprovedFalseOrIsApprovedIsNull());
             return baseUtils.generateSuccessResponse(payload, PROCESS_COMPLETE, PROCESS_COMPLETE_BN);
         } catch (Exception ex) {
             return baseUtils.generateErrorResponse(ex);
@@ -54,8 +54,7 @@ public class AdminModerationController {
     @GetMapping("/pending/sellers")
     public BaseResponse getPendingSellers() {
         try {
-            List<Map<String, Object>> sellers = sellerRepo.findAll().stream()
-                    .filter(s -> !Boolean.TRUE.equals(s.getIsApproved()))
+            List<Map<String, Object>> sellers = sellerRepo.findByIsApprovedFalseOrIsApprovedIsNull().stream()
                     .map(this::mapSellerToDto)
                     .collect(Collectors.toList());
             return baseUtils.generateSuccessResponse(sellers, PROCESS_COMPLETE, PROCESS_COMPLETE_BN);
@@ -67,8 +66,7 @@ public class AdminModerationController {
     @GetMapping("/pending/raiders")
     public BaseResponse getPendingRaiders() {
         try {
-            List<Map<String, Object>> raiders = raiderRepo.findAll().stream()
-                    .filter(r -> !Boolean.TRUE.equals(r.getIsApproved()))
+            List<Map<String, Object>> raiders = raiderRepo.findByIsApprovedFalseOrIsApprovedIsNull().stream()
                     .map(this::mapRaiderToDto)
                     .collect(Collectors.toList());
             return baseUtils.generateSuccessResponse(raiders, PROCESS_COMPLETE, PROCESS_COMPLETE_BN);
@@ -80,8 +78,7 @@ public class AdminModerationController {
     @GetMapping("/pending/shops")
     public BaseResponse getPendingShops() {
         try {
-            List<Map<String, Object>> shops = shopRepo.findAll().stream()
-                    .filter(s -> !Boolean.TRUE.equals(s.getIsApproved()))
+            List<Map<String, Object>> shops = shopRepo.findByIsApprovedFalseOrIsApprovedIsNull().stream()
                     .map(this::mapShopToDto)
                     .collect(Collectors.toList());
             return baseUtils.generateSuccessResponse(shops, PROCESS_COMPLETE, PROCESS_COMPLETE_BN);
@@ -93,8 +90,7 @@ public class AdminModerationController {
     @GetMapping("/pending/products")
     public BaseResponse getPendingProducts() {
         try {
-            List<Map<String, Object>> products = productRepo.findAll().stream()
-                    .filter(p -> !Boolean.TRUE.equals(p.getIsApproved()))
+            List<Map<String, Object>> products = productRepo.findByIsApprovedFalseOrIsApprovedIsNull().stream()
                     .map(this::mapProductToDto)
                     .collect(Collectors.toList());
             return baseUtils.generateSuccessResponse(products, PROCESS_COMPLETE, PROCESS_COMPLETE_BN);
@@ -220,7 +216,7 @@ public class AdminModerationController {
     private Map<String, Object> mapSellerToDto(Seller s) {
         Map<String, Object> map = new HashMap<>();
         map.put("id", s.getId());
-        map.put("name", s.getFullName() != null ? s.getFullName() : (s.getAppUser() != null ? s.getAppUser().getUsername() : "Seller #" + s.getId()));
+        map.put("name", s.getFullName() != null && !s.getFullName().isBlank() ? s.getFullName() : (s.getAppUser() != null ? s.getAppUser().getUsername() : "Seller #" + s.getId()));
         map.put("fullName", s.getFullName());
         map.put("phone", s.getPhone());
         map.put("nid", s.getNid());
@@ -228,13 +224,20 @@ public class AdminModerationController {
         map.put("isApproved", Boolean.TRUE.equals(s.getIsApproved()));
         map.put("active", s.getActive());
         map.put("entryDate", s.getEntryDate());
+        if (s.getShop() != null) {
+            map.put("shopId", s.getShop().getId());
+            map.put("shopName", s.getShop().getShopName());
+            map.put("shopPhone", s.getShop().getPhoneNumber());
+            map.put("shopAddress", s.getShop().getShopAddress());
+            map.put("shopType", s.getShop().getShopType());
+        }
         return map;
     }
 
     private Map<String, Object> mapRaiderToDto(Raider r) {
         Map<String, Object> map = new HashMap<>();
         map.put("id", r.getId());
-        map.put("name", r.getFullName() != null ? r.getFullName() : (r.getAppUser() != null ? r.getAppUser().getUsername() : "Rider #" + r.getId()));
+        map.put("name", r.getFullName() != null && !r.getFullName().isBlank() ? r.getFullName() : (r.getAppUser() != null ? r.getAppUser().getUsername() : "Rider #" + r.getId()));
         map.put("fullName", r.getFullName());
         map.put("phone", r.getPhone());
         map.put("nid", r.getNid());
@@ -254,13 +257,48 @@ public class AdminModerationController {
         map.put("shopName", s.getShopName());
         map.put("shopNameBn", s.getShopNameBn());
         map.put("phone", s.getPhoneNumber());
+        map.put("phoneNumber", s.getPhoneNumber());
         map.put("shopType", s.getShopType() != null ? s.getShopType() : "RESTAURANT");
         map.put("shopAddress", s.getShopAddress());
+        map.put("address", s.getShopAddress());
         map.put("about", s.getAbout());
         map.put("logoUrl", s.getLogoUrl());
+        map.put("shopLat", s.getShopLat());
+        map.put("shopLon", s.getShopLon());
         map.put("isApproved", Boolean.TRUE.equals(s.getIsApproved()));
+        map.put("approvedBy", s.getApprovedBy());
+        map.put("approvedDate", s.getApprovedDate());
         map.put("active", s.getActive());
         map.put("entryDate", s.getEntryDate());
+        // Shop Category + Service (so admin knows which vertical the shop is registering under)
+        if (s.getShopCategory() != null) {
+            map.put("shopCategoryId", s.getShopCategory().getId());
+            map.put("shopCategoryName", s.getShopCategory().getName());
+            if (s.getShopCategory().getService() != null) {
+                map.put("serviceId", s.getShopCategory().getService().getId());
+                map.put("serviceName", s.getShopCategory().getService().getName());
+                map.put("serviceCode", s.getShopCategory().getService().getCode());
+            }
+        }
+        if (s.getSeller() != null) {
+            map.put("sellerId", s.getSeller().getId());
+            map.put("sellerName", s.getSeller().getFullName());
+            map.put("sellerPhone", s.getSeller().getPhone());
+            if (s.getSeller().getAppUser() != null) {
+                map.put("sellerUsername", s.getSeller().getAppUser().getUsername());
+                map.put("username", s.getSeller().getAppUser().getUsername());
+            }
+        }
+        if (s.getZone() != null) {
+            map.put("zoneId", s.getZone().getId());
+            map.put("zoneName", s.getZone().getName());
+            if (s.getZone().getUpazila() != null) {
+                map.put("upazilaName", s.getZone().getUpazila().getName());
+                if (s.getZone().getUpazila().getDistrict() != null) {
+                    map.put("districtName", s.getZone().getUpazila().getDistrict().getName());
+                }
+            }
+        }
         return map;
     }
 

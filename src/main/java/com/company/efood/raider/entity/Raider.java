@@ -40,6 +40,12 @@ public class Raider extends BaseEntity {
     @Column(name = "BIRTH_DATE")
     private Date birthDate;
 
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "RAIDER_DOCUMENTS", joinColumns = @JoinColumn(name = "RAIDER_ID"))
+    @MapKeyColumn(name = "DOC_NAME")
+    @Column(name = "DOC_URL", length = 1000)
+    private java.util.Map<String, String> complianceDocuments = new java.util.HashMap<>();
+
     @Column(name = "VEHICLE_TYPE")
     private String vehicleType;
 

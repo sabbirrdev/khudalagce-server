@@ -40,9 +40,22 @@ public class RegisterServiceImpl implements RegisterService {
         AppUser savedEntity = appUserRepo.save(appUser);
         System.out.println("APP USER SAVED");
         Map<AppUserType, Consumer<AppUser>> userTypeHandlers = Map.of(
-                AppUserType.CUSTOMER, user -> customerRepo.save(new Customer(user)),
-                AppUserType.SELLER, user -> sellerRepo.save(new Seller(user)),
-                AppUserType.RAIDER, user -> raiderRepo.save(new Raider(user))
+                AppUserType.CUSTOMER, user -> {
+                    Customer c = customerRepo.save(new Customer(user));
+                    user.setCustomer(c);
+                },
+                AppUserType.SELLER, user -> {
+                    Seller s = new Seller(user);
+                    if (user.getDisplayName() != null) {
+                        s.setFullName(user.getDisplayName());
+                    }
+                    sellerRepo.save(s);
+                    user.setSeller(s);
+                },
+                AppUserType.RAIDER, user -> {
+                    Raider r = raiderRepo.save(new Raider(user));
+                    user.setRaider(r);
+                }
         );
         userTypeHandlers.getOrDefault(appUser.getAppUserType(), user -> {}).accept(savedEntity);
         return savedEntity;

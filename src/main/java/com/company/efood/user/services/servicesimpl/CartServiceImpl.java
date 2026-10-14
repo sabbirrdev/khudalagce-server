@@ -188,6 +188,12 @@ public class CartServiceImpl implements CartService {
     @Override
     public Page<CartItemDto> getPageableCartItems(BasePageableRequest basePageableRequest) {
         Long customerId = CurrentUserContext.getReferenceId();
+        if (customerId == null && CurrentUserContext.getUserId() != null) {
+            Customer customer = customerRepo.findByAppUserId(CurrentUserContext.getUserId()).orElse(null);
+            if (customer != null) {
+                customerId = customer.getId();
+            }
+        }
         PageRequest pageRequest = baseUtils.getPageRequest(basePageableRequest.getPage(), basePageableRequest.getSize());
         Page<CartItem> cartItemPage = (customerId != null) ? cartRepo.pageableCartByCustomerId(customerId, pageRequest) : cartRepo.pageableCartByCartKey(basePageableRequest.getStringParam1(), pageRequest);
         return new PageImpl<>(convertEntityListToDtoList(cartItemPage.stream()), pageRequest, cartItemPage.getTotalElements());
@@ -205,10 +211,22 @@ public class CartServiceImpl implements CartService {
     @Transactional
     @Override
     public void mergeGuestCartToUser(String cartKey, Long userId) {
+        if (cartKey == null || cartKey.isBlank()) return;
         Logger logger = Logger.getLogger(CartServiceImpl.class.getName());
-        logger.info("Merging guest cart to user: " + cartKey + " " + userId);
-        logger.info("CustomerId: " + CurrentUserContext.getReferenceId() + " " + CurrentUserContext.getRole());
-        Customer customer = customerRepo.findById(Objects.requireNonNull(CurrentUserContext.getReferenceId())).orElseThrow(() -> new RuntimeException("Customer not found"));
+        logger.info("Merging guest cart to user: " + cartKey + " for userId=" + userId);
+
+        Long refCustomerId = CurrentUserContext.getReferenceId();
+        Customer customer = null;
+        if (refCustomerId != null) {
+            customer = customerRepo.findById(refCustomerId).orElse(null);
+        }
+        if (customer == null && userId != null) {
+            customer = customerRepo.findByAppUserId(userId).orElse(null);
+        }
+        if (customer == null) {
+            logger.warning("Customer profile not found for userId: " + userId + ". Cannot merge cart.");
+            return;
+        }
 
         List<CartItem> guestItems = cartRepo.findByCartKey(cartKey);
         if (guestItems.isEmpty()) return;
@@ -292,6 +310,10 @@ public class CartServiceImpl implements CartService {
         }
 
         Long customerId = CurrentUserContext.getReferenceId();
+        if (customerId == null && CurrentUserContext.getUserId() != null) {
+            Customer c = customerRepo.findByAppUserId(CurrentUserContext.getUserId()).orElse(null);
+            if (c != null) customerId = c.getId();
+        }
         String cartKey = dto.getCartKey();
 
         CartItem entity = null;

@@ -32,4 +32,8 @@ public class ShopDto extends BaseDto {
     private Double shopLon;
     private String shopAddress;
     private String shopType;
+    private Long shopCategoryId;
+    private String shopCategoryName;
+    private Long serviceId;
+    private String serviceName;
 }

@@ -36,4 +36,7 @@ public interface BranchRepo extends JpaRepository<Branch,Long> {
     );
 
     java.util.Optional<Branch> findFirstByShopIdAndIsOpenTrueAndActiveTrue(Long shopId);
+
+    /** Efficient existence check — does this shop have at least one active branch? */
+    boolean existsByShopIdAndActiveTrue(Long shopId);
 }

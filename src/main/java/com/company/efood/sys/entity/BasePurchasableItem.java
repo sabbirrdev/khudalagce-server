@@ -29,6 +29,9 @@ public abstract class BasePurchasableItem extends BaseEntity {
     @Column(name = "UNIT_PRICE", nullable = false)
     private BigDecimal unitPrice;
 
+    @Column(name = "BUYING_PRICE", precision = 19, scale = 4)
+    private BigDecimal buyingPrice;
+
     @Column(name = "TOTAL_PRICE", nullable = false)
     private BigDecimal totalPrice;
 

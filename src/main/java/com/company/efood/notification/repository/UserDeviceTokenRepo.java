@@ -14,6 +14,8 @@ public interface UserDeviceTokenRepo extends JpaRepository<UserDeviceToken, Long
 
     List<UserDeviceToken> findByUserIdAndAppTypeAndIsActiveTrue(Long userId, UserDeviceToken.AppType appType);
 
+    List<UserDeviceToken> findByUserIdAndIsActiveTrue(Long userId);
+
     List<UserDeviceToken> findByAppTypeAndIsActiveTrue(UserDeviceToken.AppType appType);
 
     void deleteByFcmToken(String fcmToken);

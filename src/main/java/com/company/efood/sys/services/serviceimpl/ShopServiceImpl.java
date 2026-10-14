@@ -7,7 +7,6 @@ import com.company.efood.config.CurrentUserContext;
 import com.company.efood.seller.entity.Seller;
 import com.company.efood.seller.repository.BranchRepo;
 import com.company.efood.seller.repository.SellerRepo;
-import com.company.efood.sys.dto.AddressDto;
 import com.company.efood.sys.dto.ShopDto;
 import com.company.efood.sys.entity.*;
 import com.company.efood.sys.repository.AddressRepo;
@@ -17,8 +16,6 @@ import com.company.efood.sys.services.ShopService;
 import com.company.efood.zone.repository.ZoneRepository;
 import jakarta.transaction.Transactional;
 import lombok.AllArgsConstructor;
-import org.modelmapper.ModelMapper;
-import org.springframework.beans.BeanUtils;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -27,9 +24,9 @@ import org.springframework.stereotype.Service;
 import javax.naming.NameNotFoundException;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
 
 @Service
 @AllArgsConstructor
@@ -40,8 +37,8 @@ public class ShopServiceImpl implements ShopService {
     private final ZoneRepository zoneRepository;
     private final BranchRepo branchRepo;
     private final AddressRepo addressRepo;
+    private final com.company.efood.sys.repository.ShopCategoryRepo shopCategoryRepo;
     private final BaseUtils baseUtils;
-    private final ModelMapper modelMapper;
 
     private Seller resolveSeller(Long sellerId, Long userId) {
         Seller seller = null;
@@ -81,6 +78,15 @@ public class ShopServiceImpl implements ShopService {
         Shop shopEntity = generateEntity(obj, userId, seller.getId(), true);
         shopEntity = shopRepo.save(shopEntity);
 
+        // Sync seller profile with shop details if missing
+        if ((seller.getFullName() == null || seller.getFullName().isBlank()) && shopEntity.getShopName() != null) {
+            seller.setFullName(shopEntity.getShopName());
+        }
+        if ((seller.getPhone() == null || seller.getPhone().isBlank()) && shopEntity.getPhoneNumber() != null) {
+            seller.setPhone(shopEntity.getPhoneNumber());
+        }
+        sellerRepo.save(seller);
+
         // Ensure default branch is created so shop is immediately operational
         ensureDefaultBranch(shopEntity, userId);
 
@@ -119,8 +125,7 @@ public class ShopServiceImpl implements ShopService {
 
     private void ensureDefaultBranch(Shop shop, Long userId) {
         try {
-            boolean hasBranch = branchRepo.findAll().stream()
-                    .anyMatch(b -> b.getShop() != null && Objects.equals(b.getShop().getId(), shop.getId()));
+            boolean hasBranch = branchRepo.existsByShopIdAndActiveTrue(shop.getId());
             if (!hasBranch) {
                 Branch defaultBranch = new Branch();
                 defaultBranch.setName(shop.getShopName() + " - Main Branch");
@@ -234,9 +239,28 @@ public class ShopServiceImpl implements ShopService {
     @Override
     public Page<ShopDto> getPageableAllData(BasePageableRequest pageableBodyRequest, Long userId) {
         PageRequest pageRequest = baseUtils.getPageRequest(pageableBodyRequest.getPage(),pageableBodyRequest.getSize());
-        Page<Shop> shopPage = shopRepo.findAll(pageRequest);
+        Page<Shop> shopPage = shopRepo.findByApprovedTrue(pageRequest);
         List<ShopDto> shopList = convertEntityListToDtoList(shopPage.getContent().stream());
         return new PageImpl<>(shopList,pageRequest,shopPage.getTotalElements());
+    }
+
+    @Override
+    @Transactional
+    public List<ShopDto> getShopsByServiceId(Long serviceId) {
+        List<Shop> shops = shopRepo.findByServiceId(serviceId);
+        return convertEntityListToDtoList(shops.stream());
+    }
+
+    @Override
+    @Transactional
+    public Page<ShopDto> getShopsByServiceIdPageable(Long serviceId, BasePageableRequest pageableRequest) {
+        PageRequest pr = baseUtils.getPageRequest(pageableRequest.getPage(), pageableRequest.getSize());
+        String search = pageableRequest != null && pageableRequest.getSearchValue() != null && !pageableRequest.getSearchValue().trim().isEmpty()
+                ? pageableRequest.getSearchValue().trim()
+                : null;
+        Page<Shop> shopPage = shopRepo.findByServiceIdAndSearchPageable(serviceId, search, pr);
+        List<ShopDto> dtoList = convertEntityListToDtoList(shopPage.getContent().stream());
+        return new PageImpl<>(dtoList, pr, shopPage.getTotalElements());
     }
 
     //-----------------------Helper Function---------------------------
@@ -246,13 +270,54 @@ public class ShopServiceImpl implements ShopService {
             throw new RuntimeException("ShopDto is null");
         }
 
-        Shop entity = new Shop();
-        BeanUtils.copyProperties(dto, entity);
+        Shop entity;
+        if (!Boolean.TRUE.equals(isSaved) && dto.getId() != null) {
+            entity = shopRepo.findById(dto.getId()).orElse(new Shop());
+        } else {
+            entity = new Shop();
+        }
 
-        entity.setShopLat(dto.getShopLat());
-        entity.setShopLon(dto.getShopLon());
-        entity.setShopAddress(dto.getShopAddress());
-        entity.setShopType(dto.getShopType());
+        // ── Explicit field mapping (never rely on reflection that might fail silently) ──
+        if (dto.getShopName() != null && !dto.getShopName().isBlank()) {
+            entity.setShopName(dto.getShopName().trim());
+        }
+        if (dto.getPhoneNumber() != null && !dto.getPhoneNumber().isBlank()) {
+            entity.setPhoneNumber(dto.getPhoneNumber().trim());
+        }
+        if (dto.getShopNameBn() != null && !dto.getShopNameBn().isBlank()) {
+            entity.setShopNameBn(dto.getShopNameBn().trim());
+        }
+        if (dto.getLogoUrl() != null && !dto.getLogoUrl().isBlank()) {
+            entity.setLogoUrl(dto.getLogoUrl().trim());
+        }
+        if (dto.getShopLat() != null) {
+            entity.setShopLat(dto.getShopLat());
+        }
+        if (dto.getShopLon() != null) {
+            entity.setShopLon(dto.getShopLon());
+        }
+        if (dto.getShopAddress() != null && !dto.getShopAddress().isBlank()) {
+            entity.setShopAddress(dto.getShopAddress().trim());
+        }
+
+        // ── Null guards for fields that must have a value ──
+        if (dto.getAbout() != null && !dto.getAbout().trim().isEmpty()) {
+            entity.setAbout(dto.getAbout().trim());
+        } else if (entity.getAbout() == null || entity.getAbout().isBlank()) {
+            entity.setAbout(dto.getShopName() != null ? dto.getShopName() : "—");
+        }
+
+        // `shopType` defaults: derive from category if category is present, else RESTAURANT
+        if (dto.getShopType() != null && !dto.getShopType().trim().isEmpty()) {
+            entity.setShopType(dto.getShopType().trim());
+        } else if (dto.getShopCategoryId() != null) {
+            shopCategoryRepo.findById(dto.getShopCategoryId()).ifPresent(cat -> {
+                entity.setShopType(cat.getCode() != null ? cat.getCode() : cat.getName());
+            });
+        }
+        if (entity.getShopType() == null || entity.getShopType().isBlank()) {
+            entity.setShopType("RESTAURANT");
+        }
 
         if (dto.getZoneId() != null) {
             zoneRepository.findById(dto.getZoneId()).ifPresent(entity::setZone);
@@ -266,20 +331,22 @@ public class ShopServiceImpl implements ShopService {
                 Seller seller = sellerRepo.findById(sellerId)
                         .orElseThrow(() -> new NameNotFoundException("Seller Not Found with ID: " + sellerId));
 
-                entity.setEntryUser(userId);
+                entity.setEntryUser(userId != null ? userId : 0L);
                 entity.setSeller(seller);
+                if (dto.getShopCategoryId() != null) {
+                    shopCategoryRepo.findById(dto.getShopCategoryId()).ifPresent(entity::setShopCategory);
+                } else if (seller.getShopCategory() != null) {
+                    entity.setShopCategory(seller.getShopCategory());
+                }
+                entity.setActive(true);
+                entity.setIsApproved(false);   // Requires admin approval via /admin/moderation/shop/{id}/approve
                 baseUtils.setEntryUserInfo(entity);
             } else {
-                if (dto.getId() != null) {
-                    Shop dbEntity = shopRepo.findById(dto.getId()).orElse(null);
-                    if (dbEntity != null) {
-                        entity.setUpdateUser(userId);
-                        baseUtils.setUpdateUserInfo(entity, dbEntity);
-                        if (entity.getZone() == null && dbEntity.getZone() != null && dto.getZoneId() == null) {
-                            entity.setZone(dbEntity.getZone());
-                        }
-                    }
+                if (dto.getShopCategoryId() != null) {
+                    shopCategoryRepo.findById(dto.getShopCategoryId()).ifPresent(entity::setShopCategory);
                 }
+                entity.setUpdateUser(userId != null ? userId : 0L);
+                entity.setUpdateDate(LocalDateTime.now());
             }
 
             return entity;
@@ -289,20 +356,27 @@ public class ShopServiceImpl implements ShopService {
         }
     }
 
-    private Address generateAddressEntity(AddressDto addressDto,Long userId) {
-        Address address = new Address();
-        BeanUtils.copyProperties(addressDto, address);
-        address.setEntryDate(LocalDateTime.now());
-        address.setEntryUser(userId);
-        return address;
-    }
 
     private List<ShopDto> convertEntityListToDtoList(Stream<Shop> entityList) {
         return entityList.map(this::generateDto).collect(Collectors.toList());
     }
 
     private ShopDto generateDto(Shop entity) {
-        ShopDto dto = modelMapper.map(entity, ShopDto.class);
+        if (entity == null) return null;
+        ShopDto dto = new ShopDto();
+        dto.setId(entity.getId());
+        dto.setActive(entity.getActive());
+        dto.setIsActive(entity.getActive());
+        dto.setEntryDate(entity.getEntryDate());
+        dto.setShopName(entity.getShopName());
+        dto.setPhoneNumber(entity.getPhoneNumber());
+        dto.setShopNameBn(entity.getShopNameBn());
+        dto.setAbout(entity.getAbout());
+        dto.setLogoUrl(entity.getLogoUrl());
+        dto.setShopLat(entity.getShopLat());
+        dto.setShopLon(entity.getShopLon());
+        dto.setShopAddress(entity.getShopAddress());
+        dto.setShopType(entity.getShopType() != null ? entity.getShopType() : "RESTAURANT");
         if (entity.getSeller() != null) {
             dto.setSellerId(entity.getSeller().getId());
         }
@@ -312,10 +386,20 @@ public class ShopServiceImpl implements ShopService {
         if (entity.getCommissionPolicy() != null) {
             dto.setCommissionPolicyId(entity.getCommissionPolicy().getId());
         }
-        dto.setShopLat(entity.getShopLat());
-        dto.setShopLon(entity.getShopLon());
-        dto.setShopAddress(entity.getShopAddress());
-        dto.setShopType(entity.getShopType());
+
+        // ShopCategory and Service details
+        ShopCategory cat = entity.getShopCategory();
+        if (cat == null && entity.getSeller() != null) {
+            cat = entity.getSeller().getShopCategory();
+        }
+        if (cat != null) {
+            dto.setShopCategoryId(cat.getId());
+            dto.setShopCategoryName(cat.getName());
+            if (cat.getService() != null) {
+                dto.setServiceId(cat.getService().getId());
+                dto.setServiceName(cat.getService().getName());
+            }
+        }
         return dto;
     }
 }

@@ -51,7 +51,7 @@ public interface ProductRepo extends JpaRepository<Product,Long> {
     );
 
     @Query(value = "SELECT p.* FROM product p " +
-           "WHERE b.id = :branchId AND p.active = true AND p.qty <= :threshold " +
+           "WHERE p.branch_id = :branchId AND p.active = true AND p.qty <= :threshold " +
            "ORDER BY p.qty ASC, p.id DESC", nativeQuery = true)
     List<Product> findLowStockProductsByBranchId(@Param("branchId") Long branchId, @Param("threshold") Integer threshold);
 
@@ -71,4 +71,10 @@ public interface ProductRepo extends JpaRepository<Product,Long> {
             @Param("search") String search,
             Pageable pageable
     );
+
+    /** Return all products awaiting admin approval. */
+    List<Product> findByIsApprovedFalseOrIsApprovedIsNull();
+
+    /** Count products awaiting admin approval. */
+    long countByIsApprovedFalseOrIsApprovedIsNull();
 }

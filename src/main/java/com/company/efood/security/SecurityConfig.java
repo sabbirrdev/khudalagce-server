@@ -63,7 +63,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/api/public/**").permitAll()
                         .requestMatchers("/error").permitAll()
-                        .requestMatchers("/api/private/files/view/**").permitAll()
+                        .requestMatchers("/api/private/files/view/**", "/api/private/files/upload").permitAll()
                         // FCM token registration (needed early, even before login succeeds on device)
                         .requestMatchers("/api/tokens/**").permitAll()
                         .requestMatchers("/notification/tokens/**").permitAll()
@@ -78,6 +78,8 @@ public class SecurityConfig {
                                 "/swagger-ui/**",
                                 "/swagger-ui.html"
                         ).permitAll()
+                        // Profile endpoint for any authenticated user
+                        .requestMatchers("/api/private/sya/app-user/my-profile").authenticated()
                         // Seller APIs
                         .requestMatchers("/api/private/seller/**").hasAnyRole("SYSTEM_ADMIN", "SELLER")
                         // Admin system management (categories, shops, offers, zones, commission, delivery fee)

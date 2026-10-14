@@ -32,6 +32,7 @@ public class SellerProfileController {
     private final SellerRepo sellerRepo;
     private final AppUserRepo appUserRepo;
     private final AddressRepo addressRepo;
+    private final com.company.efood.sys.repository.ShopCategoryRepo shopCategoryRepo;
     private final BaseUtils baseUtils;
     private final AuthTokenUtils authTokenUtils;
 
@@ -64,11 +65,22 @@ public class SellerProfileController {
             profileData.put("fullName", seller.getFullName() != null ? seller.getFullName() : (seller.getAppUser() != null ? seller.getAppUser().getDisplayName() : ""));
             profileData.put("displayName", seller.getFullName() != null ? seller.getFullName() : (seller.getAppUser() != null ? seller.getAppUser().getDisplayName() : ""));
             profileData.put("phone", seller.getPhone() != null ? seller.getPhone() : "");
+            profileData.put("phoneVerified", seller.getAppUser() != null ? Boolean.TRUE.equals(seller.getAppUser().getPhoneVerified()) : false);
             profileData.put("nid", seller.getNid() != null ? seller.getNid() : "");
             profileData.put("birthDate", seller.getBirthDate());
             if (seller.getAddress() != null) {
                 profileData.put("address", seller.getAddress().getAddress());
                 profileData.put("addressId", seller.getAddress().getId());
+            }
+
+            if (seller.getShopCategory() != null) {
+                profileData.put("shopCategoryId", seller.getShopCategory().getId());
+                profileData.put("shopCategoryName", seller.getShopCategory().getName());
+                if (seller.getShopCategory().getService() != null) {
+                    profileData.put("serviceId", seller.getShopCategory().getService().getId());
+                    profileData.put("serviceName", seller.getShopCategory().getService().getName());
+                    profileData.put("serviceCode", seller.getShopCategory().getService().getCode());
+                }
             }
 
             return ResponseEntity.ok(baseUtils.generateSuccessResponse(profileData, PROCESS_COMPLETE, PROCESS_COMPLETE_BN));
@@ -112,6 +124,19 @@ public class SellerProfileController {
 
             if (body.containsKey("nid") && body.get("nid") != null) {
                 seller.setNid(body.get("nid").toString().trim());
+            }
+
+            if (body.containsKey("shopCategoryId") && body.get("shopCategoryId") != null) {
+                try {
+                    Long catId = Long.parseLong(body.get("shopCategoryId").toString());
+                    com.company.efood.sys.entity.ShopCategory foundCat = shopCategoryRepo.findById(catId).orElse(null);
+                    if (foundCat != null) {
+                        seller.setShopCategory(foundCat);
+                        if (seller.getShop() != null) {
+                            seller.getShop().setShopCategory(foundCat);
+                        }
+                    }
+                } catch (Exception ignored) {}
             }
 
             if (body.containsKey("address") && body.get("address") != null) {

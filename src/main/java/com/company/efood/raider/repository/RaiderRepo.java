@@ -14,4 +14,10 @@ public interface RaiderRepo extends JpaRepository<Raider,Long> {
     List<Raider> findByIsAvailableTrueOrderByIdDesc();
     List<Raider> findByIsAvailableTrueAndVehicleTypeIgnoreCaseOrderByIdDesc(String vehicleType);
     Optional<Raider> findFirstByIsAvailableTrueAndVehicleTypeIgnoreCase(String vehicleType);
+
+    /** Return all raiders awaiting admin approval. */
+    List<Raider> findByIsApprovedFalseOrIsApprovedIsNull();
+
+    /** Count raiders awaiting admin approval. */
+    long countByIsApprovedFalseOrIsApprovedIsNull();
 }

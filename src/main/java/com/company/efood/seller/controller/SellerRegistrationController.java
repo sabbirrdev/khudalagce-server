@@ -53,6 +53,8 @@ public class SellerRegistrationController {
     private final PasswordPolicyService passwordPolicyService;
     private final SellerRepo sellerRepo;
     private final FcmNotificationService fcmNotificationService;
+    private final com.company.efood.sys.repository.ShopCategoryRepo shopCategoryRepo;
+    private final com.company.efood.sys.services.SmsOtpService smsOtpService;
 
     @PostMapping("signup")
     public BaseResponse registerUser(@Valid @RequestBody RegisterRequestModel requestModel, HttpServletRequest request) {
@@ -109,18 +111,36 @@ public class SellerRegistrationController {
 
     private BaseResponse processRegistration(RegisterRequestModel requestModel, PasswordPolicyDto passwordPolicy) {
         AppUser user = generateSellerEntity(requestModel, passwordPolicy);
+        String otp = String.format("%06d", (int) (Math.random() * 1000000));
+        user.setOtp(otp);
+        user.setOtpExpiresAt(LocalDateTime.now().plusMinutes(10));
         AppUser savedUser = registerService.addUser(user);
 
         // Populate Seller profile
-        sellerRepo.findByAppUserId(savedUser.getId()).ifPresent(seller -> {
-            if (requestModel.getDisplayName() != null && !requestModel.getDisplayName().isBlank()) {
-                seller.setFullName(requestModel.getDisplayName().trim());
-            }
-            if (requestModel.getPhone() != null && !requestModel.getPhone().isBlank()) {
-                seller.setPhone(requestModel.getPhone().trim());
-            }
-            sellerRepo.save(seller);
-        });
+        Seller seller = sellerRepo.findByAppUserId(savedUser.getId())
+                .orElseGet(() -> new Seller(savedUser));
+        if (requestModel.getDisplayName() != null && !requestModel.getDisplayName().isBlank()) {
+            seller.setFullName(requestModel.getDisplayName().trim());
+        }
+        if (requestModel.getPhone() != null && !requestModel.getPhone().isBlank()) {
+            seller.setPhone(requestModel.getPhone().trim());
+        }
+
+        // Link selected ShopCategory
+        if (requestModel.getShopCategoryId() != null) {
+            shopCategoryRepo.findById(requestModel.getShopCategoryId())
+                    .ifPresent(seller::setShopCategory);
+        } else if (requestModel.getShopCategory() != null && !requestModel.getShopCategory().isBlank()) {
+            shopCategoryRepo.findByCode(requestModel.getShopCategory().trim().toUpperCase())
+                    .ifPresent(seller::setShopCategory);
+        }
+
+        sellerRepo.save(seller);
+
+        // Send SMS OTP (dev mode will log and keep in DB)
+        if (requestModel.getPhone() != null && !requestModel.getPhone().isBlank()) {
+            smsOtpService.sendOtp(requestModel.getPhone().trim(), otp);
+        }
 
         // Notify Admin Portal
         try {
@@ -129,23 +149,17 @@ public class SellerRegistrationController {
             log.warn("Could not notify admin of new seller registration: {}", e.getMessage());
         }
 
-        Authentication authentication = authenticationManager.authenticate(
-            new UsernamePasswordAuthenticationToken(requestModel.getUsername(), requestModel.getPassword())
-        );
-        SecurityContextHolder.getContext().setAuthentication(authentication);
-
-        String token = authTokenUtils.generateJWTToken(authentication);
-        CustomUserDetails userDetails = (CustomUserDetails) authentication.getPrincipal();
-        RefreshTokenDto refreshTokenDto = authTokenUtils.generateRefreshToken(requestModel.getUsername());
+        // ✅ SECURITY: Do NOT issue JWT token here. The seller must verify phone via OTP first.
+        java.util.Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("requiresOtpVerification", true);
+        data.put("phone", requestModel.getPhone() != null ? requestModel.getPhone().trim() : "");
+        data.put("username", requestModel.getUsername());
 
         return BaseResponse.builder()
-                .statusCode(HttpStatus.OK.value())
+                .statusCode(HttpStatus.ACCEPTED.value())
                 .status(true)
-                .message("Registration successful")
-                .messageBn("")
-                .data(new AuthResponseModel(token, refreshTokenDto.getRefreshToken(),
-                        userDetails.getUserTypeId(), userDetails.getAppUserType(),
-                        System.currentTimeMillis(), expiration))
+                .message("Registration successful. A 6-digit verification code has been sent to " + requestModel.getPhone() + ". Please verify your phone to continue.")
+                .data(data)
                 .build();
     }
 
@@ -167,6 +181,8 @@ public class SellerRegistrationController {
         appUser.setEntryDate(LocalDateTime.now());
         appUser.setAppUserType(AppUserType.SELLER);
         appUser.setUserTypeId(USER_TYPE_ID_SELLER);
+        appUser.setPhone(requestModel.getPhone() != null ? requestModel.getPhone().trim() : null);
+        appUser.setPhoneVerified(false);
         return appUser;
     }
 

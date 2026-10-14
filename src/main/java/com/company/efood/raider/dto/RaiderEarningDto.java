@@ -18,5 +18,4 @@ public class RaiderEarningDto extends BaseDto {
     private Double earnedAmount;
     private Boolean paid;
     private LocalDateTime earnedAt;
-    private Integer deliveryFeePolicyId;
 }

@@ -37,4 +37,24 @@ public class PublicShopController {
             return baseUtils.generateErrorResponse(e);
         }
     }
+
+    @GetMapping("/by-service/{serviceId}")
+    public BaseResponse getShopsByServiceId(@PathVariable Long serviceId) {
+        try {
+            return baseUtils.generateSuccessResponse(shopService.getShopsByServiceId(serviceId), PROCESS_COMPLETE, PROCESS_COMPLETE_BN);
+        } catch (Exception e) {
+            return baseUtils.generateErrorResponse(e);
+        }
+    }
+
+    @PostMapping("/by-service/{serviceId}")
+    public BaseResponse getShopsByServiceIdPageable(
+            @PathVariable Long serviceId,
+            @Valid @RequestBody BasePageableRequest basePageableRequest) {
+        try {
+            return baseUtils.generateSuccessResponse(shopService.getShopsByServiceIdPageable(serviceId, basePageableRequest), PROCESS_COMPLETE, PROCESS_COMPLETE_BN);
+        } catch (Exception e) {
+            return baseUtils.generateErrorResponse(e);
+        }
+    }
 }

@@ -56,8 +56,8 @@ public class Order extends BaseEntity {
     private BigDecimal tax = BigDecimal.valueOf(0.0);
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "DELIVERY_FEE_POLICY_ID")
-    private DeliveryFeePolicy deliveryFeePolicy;
+    @JoinColumn(name = "ZONE_ID")
+    private com.company.efood.zone.entity.Zone zone;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "COMMISSION_POLICY_ID")

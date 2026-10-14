@@ -34,6 +34,7 @@ public class PaymentServiceImpl implements PaymentService {
     private final SSLCommerzConfig config;
     private final PaymentRepo paymentRepo;
     private final OrderRepo orderRepo;
+    private final com.company.efood.sys.services.OrderFinancialLedgerService financialLedgerService;
     private final RestTemplate restTemplate = new RestTemplate();
 
     @Transactional
@@ -156,7 +157,13 @@ public class PaymentServiceImpl implements PaymentService {
 
         order.setStatus(OrderStatus.COMPLETED);
         order.setDeliveredAt(LocalDateTime.now());
-        orderRepo.save(order);
+        Order savedOrder = orderRepo.save(order);
+
+        try {
+            financialLedgerService.recordOrderCompletion(savedOrder);
+        } catch (Exception e) {
+            Logger.getGlobal().warning("Failed to record financial ledger on COD collect: " + e.getMessage());
+        }
 
         return "Cash collected successfully and order completed";
     }
@@ -181,6 +188,6 @@ public class PaymentServiceImpl implements PaymentService {
         if (configuredUrl != null && !configuredUrl.isBlank()) {
             return configuredUrl;
         }
-        return "http://localhost:8080" + fallbackPath;
+        return "http://192.168.0.100:8080" + fallbackPath;
     }
 }

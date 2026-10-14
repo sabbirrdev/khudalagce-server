@@ -40,13 +40,21 @@ public class SupportSocketController {
                 .orElseThrow(() -> new IllegalArgumentException("Conversation not found"));
 
         AppUser sender = senderUserId != null ? appUserRepo.findById(senderUserId).orElse(null) : null;
-        if (sender == null || !conversation.getCustomer().getId().equals(sender.getId())) {
-            throw new IllegalArgumentException("Only the conversation owner can send messages over socket");
+        if (sender == null) {
+            throw new IllegalArgumentException("Sender user not found");
         }
+        boolean isOwner = conversation.getCustomer().getId().equals(sender.getId());
+        boolean isAdmin = sender.getAppUserType() != null &&
+                (sender.getAppUserType().name().contains("ADMIN") || sender.getAppUserType().name().contains("DEV"));
+        if (!isOwner && !isAdmin) {
+            throw new IllegalArgumentException("Only the conversation owner or support admin can send messages over socket");
+        }
+
+        String resolvedRole = isAdmin ? "ADMIN" : senderRole.toUpperCase();
 
         SupportConversationMessage message = new SupportConversationMessage();
         message.setConversation(conversation);
-        message.setSenderRole(senderRole.toUpperCase());
+        message.setSenderRole(resolvedRole);
         message.setMessageText(messageText);
         message.setEntryUser(sender.getId());
         message.setEntryDate(LocalDateTime.now());

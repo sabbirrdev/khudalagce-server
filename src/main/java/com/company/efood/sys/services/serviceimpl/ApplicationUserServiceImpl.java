@@ -185,6 +185,9 @@ public class ApplicationUserServiceImpl implements ApplicationUserService {
         }
 
         dto.setPassword(null);
+        dto.setPhone(entity.getPhone());
+        dto.setDisplayName(entity.getDisplayName());
+        dto.setPhoneVerified(entity.getPhoneVerified() != null ? entity.getPhoneVerified() : false);
         return dto;
     }
 

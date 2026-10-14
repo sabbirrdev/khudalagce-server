@@ -19,10 +19,10 @@ public class FirebaseConfig {
     public void initializeFirebase() {
         try {
             // 1. Look for the file inside the src/main/resources folder
-            ClassPathResource resource = new ClassPathResource("agrocare-firebase-adminsdk.json");
+            ClassPathResource resource = new ClassPathResource("msrcommerce-firebase-serviceAccountKey.json");
 
             if (!resource.exists()) {
-                log.error("❌ [Firebase] Configuration file 'agrocare-firebase-adminsdk.json' is missing from src/main/resources/");
+                log.error("❌ [Firebase] Configuration file 'msrcommerce-firebase-serviceAccountKey.json' is missing from src/main/resources/");
                 return;
             }
 
@@ -35,7 +35,7 @@ public class FirebaseConfig {
                 // 3. Prevent duplicate initialization errors during hot reloads
                 if (FirebaseApp.getApps().isEmpty()) {
                     FirebaseApp.initializeApp(options);
-                    log.info("🚀 [Firebase] Admin SDK has been successfully initialized for agrocare!");
+                    log.info("🚀 [Firebase] Admin SDK has been successfully initialized for MSRCommerce!");
                 } else {
                     log.info("ℹ️ [Firebase] App already initialized, skipping configuration.");
                 }

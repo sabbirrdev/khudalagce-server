@@ -78,6 +78,12 @@ public class AppUser extends BaseEntity {
     @Column(name = "OTP_EXPIRES_AT")
     private LocalDateTime otpExpiresAt;
 
+    @Column(name = "PHONE", length = 30)
+    private String phone;
+
+    @Column(name = "PHONE_VERIFIED", columnDefinition = "boolean default false")
+    private Boolean phoneVerified = false;
+
     @Column(name = "EMAIL_VERIFIED", columnDefinition = "boolean default false")
     private Boolean emailVerified = false;
 

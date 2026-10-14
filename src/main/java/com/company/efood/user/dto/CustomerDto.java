@@ -26,5 +26,4 @@ public class CustomerDto extends BaseDto {
     private Date birthDate;
     private Gender gender;
     private AddressDto address;
-    private Integer deliveryFeePolicyId;
 }

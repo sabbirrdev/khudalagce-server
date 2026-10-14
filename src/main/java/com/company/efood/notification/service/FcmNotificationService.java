@@ -38,8 +38,11 @@ public class FcmNotificationService {
         token.setDeviceType(dto.getDeviceType() != null ? dto.getDeviceType() : "ANDROID");
         token.setLastActiveAt(LocalDateTime.now());
         token.setActive(true);
-        token.setEntryUser(userId);
-        token.setEntryDate(LocalDateTime.now());
+        token.setIsApproved(false);
+        if (token.getEntryDate() == null) {
+            token.setEntryDate(LocalDateTime.now());
+            token.setEntryUser(userId != null ? userId : 0L);
+        }
         return deviceTokenRepo.save(token);
     }
 
@@ -73,28 +76,11 @@ public class FcmNotificationService {
 
     public void sendNotificationToUser(Long userId, AppUserType userType, String title, String body, Map<String, String> data, String notificationType, Long orderId) {
         List<DeviceToken> tokens = deviceTokenRepo.findByAppUserIdAndActiveTrue(userId);
-        
-        // Also check UserDeviceToken table
-        UserDeviceToken.AppType mappedType = userType == AppUserType.RAIDER ? UserDeviceToken.AppType.RIDER : (userType == AppUserType.SELLER ? UserDeviceToken.AppType.SELLER : UserDeviceToken.AppType.CUSTOMER);
-        List<UserDeviceToken> udtTokens = userDeviceTokenRepo.findByUserIdAndAppTypeAndIsActiveTrue(userId, mappedType);
-
-        NotificationLog notifLog = NotificationLog.builder()
-                .appUserId(userId)
-                .appUserType(userType)
-                .title(title)
-                .body(body)
-                .notificationType(notificationType)
-                .orderId(orderId)
-                .status("PENDING")
-                .isRead(false)
-                .build();
-        notifLog.setEntryDate(LocalDateTime.now());
-        notifLog.setEntryUser(userId != null ? userId : 0L);
+        List<UserDeviceToken> udtTokens = userDeviceTokenRepo.findByUserIdAndIsActiveTrue(userId);
 
         if (tokens.isEmpty() && udtTokens.isEmpty()) {
             log.info("📢 [FCM] No registered device tokens for userId={}, logged to database", userId);
-            notifLog.setStatus("NO_TOKEN");
-            notificationLogRepo.save(notifLog);
+            saveNotificationLog(userId, userType, title, body, notificationType, orderId, "NO_TOKEN", null);
             return;
         }
 
@@ -102,16 +88,18 @@ public class FcmNotificationService {
         for (DeviceToken dt : tokens) allTokens.add(dt.getFcmToken());
         for (UserDeviceToken udt : udtTokens) allTokens.add(udt.getFcmToken());
 
+        String lastStatus = "PENDING";
+        String lastMsgId = null;
         for (String fcmToken : allTokens) {
             String msgId = sendFcmMessage(fcmToken, title, body, data);
             if (msgId != null) {
-                notifLog.setStatus("SENT");
-                notifLog.setFcmMessageId(msgId);
+                lastStatus = "SENT";
+                lastMsgId = msgId;
             } else {
-                notifLog.setStatus("FAILED");
+                lastStatus = "FAILED";
             }
         }
-        notificationLogRepo.save(notifLog);
+        saveNotificationLog(userId, userType, title, body, notificationType, orderId, lastStatus, lastMsgId);
     }
 
     public void sendNotificationToRiders(String title, String body, Map<String, String> data, String notificationType, Long orderId) {
@@ -124,21 +112,40 @@ public class FcmNotificationService {
 
         log.info("📢 [FCM] Broadcasting notification to {} active riders: '{}'", allTokens.size(), title);
 
-        NotificationLog notifLog = NotificationLog.builder()
-                .appUserType(AppUserType.RAIDER)
-                .title(title)
-                .body(body)
-                .notificationType(notificationType)
-                .orderId(orderId)
-                .status(allTokens.isEmpty() ? "NO_RIDERS" : "SENT")
-                .isRead(false)
-                .build();
-        notifLog.setEntryDate(LocalDateTime.now());
-        notifLog.setEntryUser(0L);
-        notificationLogRepo.save(notifLog);
+        // Save a single broadcast notification log (appUserId=null signals broadcast)
+        saveNotificationLog(null, AppUserType.RAIDER, title, body, notificationType, orderId,
+                allTokens.isEmpty() ? "NO_RIDERS" : "SENT", null);
 
         for (String token : allTokens) {
             sendFcmMessage(token, title, body, data);
+        }
+    }
+
+    /**
+     * Saves a NotificationLog record with all required BaseEntity fields set.
+     * This prevents NOT NULL constraint violations on ENTRY_USER, ENTRY_DATE, and ACTIVE columns.
+     */
+    private void saveNotificationLog(Long appUserId, AppUserType userType, String title, String body,
+                                      String notificationType, Long orderId, String status, String fcmMessageId) {
+        try {
+            NotificationLog log2 = new NotificationLog();
+            log2.setAppUserId(appUserId);
+            log2.setAppUserType(userType);
+            log2.setTitle(title);
+            log2.setBody(body);
+            log2.setNotificationType(notificationType);
+            log2.setOrderId(orderId);
+            log2.setStatus(status);
+            log2.setFcmMessageId(fcmMessageId);
+            log2.setIsRead(false);
+            // BaseEntity required fields
+            log2.setActive(true);
+            log2.setIsApproved(false);
+            log2.setEntryDate(LocalDateTime.now());
+            log2.setEntryUser(appUserId != null ? appUserId : 0L);
+            notificationLogRepo.save(log2);
+        } catch (Exception ex) {
+            log.error("⚠️ [FCM] Failed to save notification log: {}", ex.getMessage());
         }
     }
 
@@ -224,6 +231,47 @@ public class FcmNotificationService {
         }
     }
 
+    public void notifyRidersOrderReadyForPickup(Long orderId, String shopName, String area) {
+        String title = "🛵 Order Ready for Pickup!";
+        String body = String.format("Order #%d at %s is ready for pickup! Tap to claim and deliver.",
+                orderId, shopName != null ? shopName : "Restaurant");
+
+        Map<String, String> data = new HashMap<>();
+        data.put("orderId", String.valueOf(orderId));
+        data.put("type", "ORDER_READY_FOR_PICKUP");
+        data.put("click_action", "FLUTTER_NOTIFICATION_CLICK");
+
+        sendNotificationToRiders(title, body, data, "ORDER_READY_FOR_PICKUP", orderId);
+    }
+
+    /**
+     * Admin-initiated broadcast notification to ALL customer devices.
+     * Use for announcements, exclusive offers, or any app-wide notice.
+     */
+    public void sendBroadcastToAllCustomers(String title, String body, String notificationType) {
+        List<DeviceToken> customerTokens = deviceTokenRepo.findByAppUserTypeAndActiveTrue(AppUserType.CUSTOMER);
+        List<UserDeviceToken> udtCustomers = userDeviceTokenRepo.findByAppTypeAndIsActiveTrue(UserDeviceToken.AppType.CUSTOMER);
+
+        Set<String> allTokens = new HashSet<>();
+        for (DeviceToken dt : customerTokens) allTokens.add(dt.getFcmToken());
+        for (UserDeviceToken udt : udtCustomers) allTokens.add(udt.getFcmToken());
+
+        log.info("📢 [FCM] Admin broadcast to {} customer devices: '{}'", allTokens.size(), title);
+
+        Map<String, String> data = new HashMap<>();
+        data.put("type", notificationType != null ? notificationType : "ADMIN_BROADCAST");
+        data.put("click_action", "FLUTTER_NOTIFICATION_CLICK");
+
+        // Save a single broadcast log entry
+        saveNotificationLog(null, AppUserType.CUSTOMER, title, body,
+                notificationType != null ? notificationType : "ADMIN_BROADCAST",
+                null, allTokens.isEmpty() ? "NO_CUSTOMERS" : "SENT", null);
+
+        for (String token : allTokens) {
+            sendFcmMessage(token, title, body, data);
+        }
+    }
+
     private String sendFcmMessage(String fcmToken, String title, String body, Map<String, String> data) {
         try {
             Notification notification = Notification.builder()
@@ -238,6 +286,27 @@ public class FcmNotificationService {
             if (data != null && !data.isEmpty()) {
                 messageBuilder.putAllData(data);
             }
+
+            // High-importance Android channel for immediate heads-up & audible alerts
+            com.google.firebase.messaging.AndroidConfig androidConfig = com.google.firebase.messaging.AndroidConfig.builder()
+                    .setPriority(com.google.firebase.messaging.AndroidConfig.Priority.HIGH)
+                    .setNotification(com.google.firebase.messaging.AndroidNotification.builder()
+                            .setChannelId("ekhanei_high_importance_channel")
+                            .setSound("default")
+                            .setDefaultSound(true)
+                            .setDefaultVibrateTimings(true)
+                            .build())
+                    .build();
+
+            com.google.firebase.messaging.ApnsConfig apnsConfig = com.google.firebase.messaging.ApnsConfig.builder()
+                    .setAps(com.google.firebase.messaging.Aps.builder()
+                            .setSound("default")
+                            .setContentAvailable(true)
+                            .build())
+                    .build();
+
+            messageBuilder.setAndroidConfig(androidConfig)
+                    .setApnsConfig(apnsConfig);
 
             String responseId = FirebaseMessaging.getInstance().send(messageBuilder.build());
             log.info("✅ [FCM] Notification successfully sent to {}. Msg ID: {}", fcmToken, responseId);

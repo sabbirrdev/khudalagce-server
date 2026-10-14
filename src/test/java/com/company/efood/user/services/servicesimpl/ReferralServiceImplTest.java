@@ -135,6 +135,9 @@ class ReferralServiceImplTest {
     @Test
     void shouldReturnCorrectReferralInfo() {
         when(customerRepo.findById(1L)).thenReturn(Optional.of(referrer));
+        // countByReferredById: total friends who used this referral code
+        when(customerRepo.countByReferredById(1L)).thenReturn(3L);
+        // countReferredAndRewarded: friends whose rewards have been credited (for points calculation)
         when(customerRepo.countReferredAndRewarded(1L)).thenReturn(3L);
 
         ReferralInfoDto info = referralService.getReferralInfo(1L);

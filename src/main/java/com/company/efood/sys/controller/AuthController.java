@@ -11,11 +11,13 @@ import com.company.efood.sys.model.LoginRequestModel;
 import com.company.efood.sys.model.RegisterRequestModel;
 import com.company.efood.sys.repository.AppUserRepo;
 import com.company.efood.sys.services.EmailOtpService;
+import com.company.efood.sys.services.SmsOtpService;
 import com.company.efood.sys.services.PasswordPolicyService;
 import com.company.efood.sys.services.RegisterService;
 import com.company.efood.sys.utils.AppUserType;
 import com.company.efood.sys.utils.AuthTokenUtils;
 import com.company.efood.sys.utils.Gender;
+import com.company.efood.user.entity.Customer;
 import com.company.efood.user.repository.CustomerRepo;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -33,6 +35,7 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.PostMapping;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -44,6 +47,7 @@ import java.util.Map;
 import static com.company.efood.base.BaseConstants.AUTHENTICATION_ENDPOINT;
 import static com.company.efood.base.BaseConstants.USER_TYPE_ID_CUSTOMER;
 
+@Slf4j
 @RestController
 @RequestMapping(AUTHENTICATION_ENDPOINT)
 public class AuthController {
@@ -73,6 +77,9 @@ public class AuthController {
     private EmailOtpService emailOtpService;
 
     @Autowired
+    private SmsOtpService smsOtpService;
+
+    @Autowired
     private AppUserRepo appUserRepo;
 
     @Autowired
@@ -93,6 +100,41 @@ public class AuthController {
 
             SecurityContextHolder.getContext().setAuthentication(authentication);
             CustomUserDetails userDetails = (CustomUserDetails) authentication.getPrincipal();
+
+            // Enforce phone OTP verification
+            AppUser appUser = appUserRepo.findByUsername(requestModel.getUsername()).orElse(null);
+            if (appUser != null && !Boolean.TRUE.equals(appUser.getPhoneVerified())
+                    && appUser.getAppUserType() != AppUserType.SYSTEM_ADMIN
+                    && appUser.getAppUserType() != AppUserType.DEVELOPER) {
+
+                String otp = String.format("%06d", (int) (Math.random() * 1000000));
+                appUser.setOtp(otp);
+                appUser.setOtpExpiresAt(LocalDateTime.now().plusMinutes(10));
+                appUserRepo.save(appUser);
+
+                String phoneNumber = (appUser.getPhone() != null && !appUser.getPhone().isBlank())
+                        ? appUser.getPhone()
+                        : requestModel.getUsername();
+
+                boolean smsSent = smsOtpService.sendOtp(phoneNumber, otp);
+                log.info("📱 [OTP ENFORCEMENT] User '{}' is not OTP verified. Sent new SMS OTP to '{}'", appUser.getUsername(), phoneNumber);
+
+                BaseResponse unverifiedResponse = BaseResponse.builder()
+                        .status(false)
+                        .statusCode(HttpStatus.FORBIDDEN.value())
+                        .message("Your phone number is not verified. A verification code has been sent to " + phoneNumber + ".")
+                        .messageBn("আপনার মোবাইল নম্বরটি যাচাই করা হয়নি। " + phoneNumber + " নম্বরে ওটিপি পাঠানো হয়েছে।")
+                        .data(Map.of(
+                                "requiresOtpVerification", true,
+                                "phone", phoneNumber,
+                                "username", appUser.getUsername(),
+                                "smsSent", smsSent,
+                                "otp", smsSent ? "HIDDEN" : otp
+                        ))
+                        .build();
+
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(unverifiedResponse);
+            }
 
             String token = authTokenUtils.generateJWTToken(authentication);
             RefreshTokenDto refreshTokenDto = authTokenUtils.generateRefreshToken(requestModel.getUsername());
@@ -210,27 +252,33 @@ public class AuthController {
 
         try {
             AppUser newUser = generateAppUserEntity(requestModel, passwordPolicy);
+            String otp = String.format("%06d", (int) (Math.random() * 1000000));
+            newUser.setOtp(otp);
+            newUser.setOtpExpiresAt(LocalDateTime.now().plusMinutes(10));
             AppUser savedUser = registerService.addUser(newUser);
             populateCustomerProfile(savedUser, requestModel);
 
-            Authentication authentication = authenticationManager.authenticate(
-                    new UsernamePasswordAuthenticationToken(requestModel.getUsername(), password));
-            SecurityContextHolder.getContext().setAuthentication(authentication);
+            // Trigger SMS OTP (dev mode will log to console & leave in DB)
+            if (requestModel.getPhone() != null && !requestModel.getPhone().isBlank()) {
+                smsOtpService.sendOtp(requestModel.getPhone().trim(), otp);
+            }
 
-            String token = authTokenUtils.generateJWTToken(authentication);
-            CustomUserDetails userDetails = (CustomUserDetails) authentication.getPrincipal();
-            RefreshTokenDto refreshTokenDto = authTokenUtils.generateRefreshToken(requestModel.getUsername());
+            // ✅ SECURITY: Do NOT issue JWT token here. The user must verify their phone
+            // number via OTP before they can sign in and receive an access token.
+            java.util.Map<String, Object> data = new java.util.LinkedHashMap<>();
+            data.put("requiresOtpVerification", true);
+            data.put("phone", requestModel.getPhone() != null ? requestModel.getPhone().trim() : "");
+            data.put("username", requestModel.getUsername());
 
             BaseResponse response = BaseResponse.builder()
                     .status(true)
-                    .statusCode(HttpStatus.CREATED.value())
-                    .message("Registration successful")
+                    .statusCode(HttpStatus.ACCEPTED.value())
+                    .message("Registration successful. A 6-digit verification code has been sent to " + requestModel.getPhone() + ". Please verify your phone to continue.")
                     .messageBn("")
-                    .data(new AuthResponseModel(token, refreshTokenDto.getRefreshToken(), userDetails.getUserTypeId(),
-                            userDetails.getAppUserType(), System.currentTimeMillis(), expiration))
+                    .data(data)
                     .build();
 
-            return ResponseEntity.status(HttpStatus.CREATED).body(response);
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
 
         } catch (Exception e) {
             BaseResponse response = BaseResponse.builder()
@@ -334,6 +382,125 @@ public class AuthController {
                 .status(true)
                 .statusCode(HttpStatus.OK.value())
                 .message("Email verified successfully")
+                .build();
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/phone-otp/request")
+    public ResponseEntity<BaseResponse> requestPhoneOtp(@RequestBody Map<String, String> body) {
+        String identifier = body.get("phone");
+        if (identifier == null || identifier.isBlank()) {
+            identifier = body.get("username");
+        }
+        if (identifier == null || identifier.isBlank()) {
+            BaseResponse response = BaseResponse.builder()
+                    .status(false)
+                    .statusCode(HttpStatus.BAD_REQUEST.value())
+                    .message("Phone or username is required")
+                    .build();
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+        }
+
+        final String target = identifier.trim();
+        AppUser user = appUserRepo.findByPhone(target)
+                .or(() -> appUserRepo.findByUsername(target))
+                .orElse(null);
+
+        if (user == null) {
+            BaseResponse response = BaseResponse.builder()
+                    .status(false)
+                    .statusCode(HttpStatus.NOT_FOUND.value())
+                    .message("User not found with phone/username: " + target)
+                    .build();
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+        }
+
+        String otp = String.format("%06d", (int) (Math.random() * 1000000));
+        user.setOtp(otp);
+        user.setOtpExpiresAt(LocalDateTime.now().plusMinutes(5));
+        user.setUpdateDate(LocalDateTime.now());
+        appUserRepo.save(user);
+
+        String phoneNumber = user.getPhone() != null && !user.getPhone().isBlank() ? user.getPhone() : target;
+        boolean smsSent = smsOtpService.sendOtp(phoneNumber, otp);
+
+        BaseResponse response = BaseResponse.builder()
+                .status(true)
+                .statusCode(HttpStatus.OK.value())
+                .message(smsSent ? "OTP sent to your phone" : "OTP generated for testing. Check database OTP column or server logs.")
+                .data(Map.of(
+                        "phone", phoneNumber,
+                        "smsSent", smsSent,
+                        "otp", smsSent ? "HIDDEN" : otp, // Exposing in response when SMS is disabled for easy developer testing
+                        "expiresAt", user.getOtpExpiresAt().toString()
+                ))
+                .build();
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/phone-otp/verify")
+    public ResponseEntity<BaseResponse> verifyPhoneOtp(@RequestBody Map<String, String> body) {
+        String identifier = body.get("phone");
+        if (identifier == null || identifier.isBlank()) {
+            identifier = body.get("username");
+        }
+        String otp = body.get("otp");
+
+        if (identifier == null || identifier.isBlank() || otp == null || otp.isBlank()) {
+            BaseResponse response = BaseResponse.builder()
+                    .status(false)
+                    .statusCode(HttpStatus.BAD_REQUEST.value())
+                    .message("Phone/username and OTP are required")
+                    .build();
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+        }
+
+        final String target = identifier.trim();
+        AppUser user = appUserRepo.findByPhone(target)
+                .or(() -> appUserRepo.findByUsername(target))
+                .orElse(null);
+
+        if (user == null) {
+            BaseResponse response = BaseResponse.builder()
+                    .status(false)
+                    .statusCode(HttpStatus.NOT_FOUND.value())
+                    .message("User not found")
+                    .build();
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+        }
+
+        if (user.getOtpExpiresAt() == null || user.getOtpExpiresAt().isBefore(LocalDateTime.now())) {
+            BaseResponse response = BaseResponse.builder()
+                    .status(false)
+                    .statusCode(HttpStatus.BAD_REQUEST.value())
+                    .message("OTP expired. Please request a new code.")
+                    .build();
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+        }
+
+        if (!otp.trim().equals(user.getOtp())) {
+            BaseResponse response = BaseResponse.builder()
+                    .status(false)
+                    .statusCode(HttpStatus.BAD_REQUEST.value())
+                    .message("Invalid OTP code")
+                    .build();
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+        }
+
+        user.setPhoneVerified(true);
+        user.setOtp(null);
+        user.setOtpExpiresAt(null);
+        user.setUpdateDate(LocalDateTime.now());
+        appUserRepo.save(user);
+
+        BaseResponse response = BaseResponse.builder()
+                .status(true)
+                .statusCode(HttpStatus.OK.value())
+                .message("Phone number verified successfully")
+                .data(Map.of(
+                        "phoneVerified", true,
+                        "username", user.getUsername()
+                ))
                 .build();
         return ResponseEntity.ok(response);
     }
@@ -517,6 +684,8 @@ public class AuthController {
         appUser.setEntryDate(LocalDateTime.now());
         appUser.setAppUserType(AppUserType.CUSTOMER);
         appUser.setUserTypeId(USER_TYPE_ID_CUSTOMER);
+        appUser.setPhone(requestModel.getPhone() != null ? requestModel.getPhone().trim() : null);
+        appUser.setPhoneVerified(false);
         appUser.setEmailVerified(false);
         return appUser;
     }
@@ -532,25 +701,27 @@ public class AuthController {
             return;
         }
 
-        customerRepo.findByAppUserId(savedUser.getId()).ifPresent(customer -> {
-            if (requestModel.getDisplayName() != null && !requestModel.getDisplayName().isBlank()) {
-                customer.setFullName(requestModel.getDisplayName().trim());
-            }
-            if (requestModel.getPhone() != null && !requestModel.getPhone().isBlank()) {
-                customer.setPhone(requestModel.getPhone().trim());
-            }
-            if (requestModel.getUsername() != null && !requestModel.getUsername().isBlank()) {
-                customer.setEmail(requestModel.getUsername().trim());
-            }
-            Gender gender = resolveGender(requestModel.getGender());
-            if (gender != null) {
-                customer.setGender(gender);
-            }
-            customerRepo.save(customer);
+        Customer customer = customerRepo.findByAppUserId(savedUser.getId())
+                .orElseGet(() -> customerRepo.save(new Customer(savedUser)));
 
-            // Initialize unique referral code and link referrer if referralCode supplied
-            referralService.initReferral(customer, requestModel.getReferralCode());
-        });
+        if (requestModel.getDisplayName() != null && !requestModel.getDisplayName().isBlank()) {
+            customer.setFullName(requestModel.getDisplayName().trim());
+        }
+        if (requestModel.getPhone() != null && !requestModel.getPhone().isBlank()) {
+            customer.setPhone(requestModel.getPhone().trim());
+        }
+        if (requestModel.getUsername() != null && !requestModel.getUsername().isBlank()) {
+            customer.setEmail(requestModel.getUsername().trim());
+        }
+        Gender gender = resolveGender(requestModel.getGender());
+        if (gender != null) {
+            customer.setGender(gender);
+        }
+        customer = customerRepo.save(customer);
+        savedUser.setCustomer(customer);
+
+        // Initialize unique referral code and link referrer if referralCode supplied
+        referralService.initReferral(customer, requestModel.getReferralCode());
     }
 
     private Gender resolveGender(String genderValue) {

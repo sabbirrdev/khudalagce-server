@@ -3,12 +3,18 @@ package com.company.efood.notification.entity;
 import com.company.efood.base.BaseEntity;
 import com.company.efood.sys.utils.AppUserType;
 import jakarta.persistence.*;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
 
 @Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
 @Entity
 @Table(name = "DEVICE_TOKENS")
 @EqualsAndHashCode(callSuper = true)
